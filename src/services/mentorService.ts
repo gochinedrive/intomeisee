@@ -1,14 +1,8 @@
-import { MentorSessionState } from "@/lib/mentorSessionState";
+import type { MentorSessionState, MentorApiResponse } from "@/types/mentor";
 
 const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/mentor-chat`;
 
-export interface MentorResponse {
-  assistantText: string;
-  responseType: string;
-  exerciseOptions?: string[];
-  snapshotNeeded?: boolean;
-  safetyOverride?: boolean;
-}
+export type MentorResponse = MentorApiResponse;
 
 type Message = { role: "user" | "assistant"; content: string };
 
