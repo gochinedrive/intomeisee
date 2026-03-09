@@ -1,10 +1,11 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft, Send, Mic } from "lucide-react";
+import { ArrowLeft, Send, Mic, BookOpen, ChevronRight } from "lucide-react";
 import { toast } from "sonner";
 import {
   MentorSessionState,
+  MentorStep,
   createInitialState,
   advanceState,
   postAIAdvance,
@@ -18,11 +19,17 @@ type Message = {
   id: string;
   role: "mentor" | "user";
   content: string;
+  actions?: ChatAction[];
+};
+
+type ChatAction = {
+  label: string;
+  action: string;
 };
 
 const entryGreetings: Record<string, string> = {
   understand:
-    "I'm glad you're here. Take a moment, and tell me — what's present for you right now? There's no right answer. Just share whatever comes up.",
+    "I'm glad you're here. Take a moment, and tell me — what emotion feels strongest for you right now? There's no right answer. Just share whatever comes up.",
   regulate:
     "Let's help you feel a bit more settled. What emotion or sensation is most present for you right now? Or if you'd prefer, just tell me: are you feeling activated and tense, or heavy and low?",
   prepare:
@@ -39,10 +46,33 @@ const entryTitles: Record<string, string> = {
 const FALLBACK_RESPONSES: Record<string, string> = {
   awaiting_body_location: "Thank you for sharing that. Where do you notice this feeling in your body?",
   awaiting_intensity: "I hear you. On a scale of 1 to 10, how intense does this feel right now?",
+  awaiting_trigger: "Thank you. What happened just before you felt this emotion?",
+  awaiting_mirror_confirmation: "Let me make sure I understood correctly. Does that sound right?",
+  awaiting_emotion_label: "Sometimes emotions carry more than one layer. Does the label feel right, or is there something deeper?",
   ready_for_exercise_offer: "Let me suggest some practices that might help.",
   post_practice_check: "How does the emotion feel now? You can say much better, slightly better, about the same, or worse — or give a number 1-10.",
   awaiting_user_directed_support: "We've tried a few approaches. What do you feel might help you most right now?",
+  integration_acknowledge: "You showed real awareness by pausing and working with this feeling.",
+  integration_reconstruct: "Let's look at the journey you just went through.",
+  integration_psychoeducation: "There's something interesting about how the brain processes emotions like this.",
+  integration_meaning: "What do you think this feeling might have been trying to tell you?",
+  integration_body_check: "How does your body feel now compared to before?",
+  integration_journal_invite: "Would you like to capture this moment in your journal while it's fresh?",
+  return_to_options: "I hope you carry this lighter feeling into the rest of your day. What would you like to explore next?",
   completed: "Thank you for spending this time with yourself. That takes real courage. 💛",
+};
+
+// Analytics event mapping per step
+const STEP_ANALYTICS: Partial<Record<MentorStep, string>> = {
+  awaiting_emotion: "emotion_selected",
+  awaiting_body_location: "body_location_selected",
+  awaiting_intensity: "intensity_recorded",
+  awaiting_trigger: "trigger_entered",
+  awaiting_mirror_confirmation: "mirror_confirmed",
+  awaiting_emotion_label: "emotion_label_confirmed",
+  awaiting_exercise_choice: "exercise_selected",
+  integration_acknowledge: "integration_phase_started",
+  integration_journal_invite: "journal_prompt_shown",
 };
 
 const MentorChatPage = () => {
@@ -72,6 +102,23 @@ const MentorChatPage = () => {
   useEffect(() => {
     analytics.track("ei_mentor_opened", { entry_path: path });
   }, [path]);
+
+  const addActionsToMessage = (step: MentorStep): ChatAction[] | undefined => {
+    if (step === "integration_journal_invite") {
+      return [
+        { label: "Write in journal", action: "journal" },
+        { label: "Maybe later", action: "skip_journal" },
+      ];
+    }
+    if (step === "return_to_options") {
+      return [
+        { label: "Understand how I feel", action: "understand" },
+        { label: "Regulate my emotions", action: "regulate" },
+        { label: "Prepare for a hard conversation", action: "prepare" },
+      ];
+    }
+    return undefined;
+  };
 
   const getMentorResponse = useCallback(
     async (allMessages: Message[], currentState: MentorSessionState) => {
@@ -120,10 +167,13 @@ const MentorChatPage = () => {
           text = FALLBACK_RESPONSES[currentState.current_step] || text;
         }
 
+        const actions = addActionsToMessage(currentState.current_step);
+
         const mentorMsg: Message = {
           id: Date.now().toString(),
           role: "mentor",
           content: text,
+          actions,
         };
         setMessages(prev => [...prev, mentorMsg]);
 
@@ -148,6 +198,29 @@ const MentorChatPage = () => {
     [path]
   );
 
+  const handleActionClick = useCallback((action: string) => {
+    if (action === "journal") {
+      analytics.track("journal_prompt_shown", { entry_path: path });
+      navigate("/app/journal");
+      return;
+    }
+    if (action === "skip_journal") {
+      // Advance to return_to_options
+      const newState = advanceState(sessionState, "maybe later");
+      setSessionState(newState);
+      const userMsg: Message = { id: Date.now().toString(), role: "user", content: "Maybe later" };
+      const newMessages = [...messages, userMsg];
+      setMessages(newMessages);
+      getMentorResponse(newMessages, newState);
+      return;
+    }
+    if (["understand", "regulate", "prepare"].includes(action)) {
+      analytics.track("mentor_navigation_returned", { entry_path: action });
+      navigate(`/app/mentor/${action}`);
+      return;
+    }
+  }, [sessionState, messages, navigate, path, getMentorResponse]);
+
   const handleSend = useCallback(() => {
     if (!input.trim() || isLoading) return;
     const userText = input.trim();
@@ -157,16 +230,11 @@ const MentorChatPage = () => {
       content: userText,
     };
 
-    // Track analytics for specific steps
+    // Track analytics for current step
     const step = sessionState.current_step;
-    if (step === "awaiting_emotion") {
-      analytics.track("emotion_selected", { entry_path: path });
-    } else if (step === "awaiting_body_location") {
-      analytics.track("body_location_selected", { entry_path: path });
-    } else if (step === "awaiting_intensity") {
-      analytics.track("intensity_recorded", { entry_path: path });
-    } else if (step === "awaiting_exercise_choice") {
-      analytics.track("exercise_selected", { entry_path: path });
+    const analyticsEvent = STEP_ANALYTICS[step];
+    if (analyticsEvent) {
+      analytics.track(analyticsEvent as any, { entry_path: path });
     }
 
     // Advance state BEFORE calling AI
@@ -188,7 +256,7 @@ const MentorChatPage = () => {
     }
   };
 
-  const isCompleted = sessionState.current_step === "completed" || sessionState.current_step === "safety_override";
+  const isTerminal = sessionState.current_step === "completed" || sessionState.current_step === "safety_override";
 
   return (
     <div className="flex flex-col h-screen bg-background">
@@ -217,7 +285,7 @@ const MentorChatPage = () => {
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.3 }}
-              className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
+              className={`flex flex-col ${msg.role === "user" ? "items-end" : "items-start"}`}
             >
               <div
                 className={`max-w-[85%] px-4 py-3 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap ${
@@ -228,6 +296,25 @@ const MentorChatPage = () => {
               >
                 {msg.content}
               </div>
+
+              {/* Action buttons */}
+              {msg.actions && msg.actions.length > 0 && (
+                <div className="flex flex-wrap gap-2 mt-2 max-w-[85%]">
+                  {msg.actions.map((act) => (
+                    <button
+                      key={act.action}
+                      onClick={() => handleActionClick(act.action)}
+                      className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium bg-accent text-accent-foreground hover:bg-accent/80 transition-colors"
+                    >
+                      {act.action === "journal" && <BookOpen className="w-3.5 h-3.5" />}
+                      {act.label}
+                      {["understand", "regulate", "prepare"].includes(act.action) && (
+                        <ChevronRight className="w-3 h-3" />
+                      )}
+                    </button>
+                  ))}
+                </div>
+              )}
             </motion.div>
           ))}
         </AnimatePresence>
@@ -267,16 +354,16 @@ const MentorChatPage = () => {
               value={input}
               onChange={e => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder={isCompleted ? "Session complete" : "Share what's on your mind..."}
+              placeholder={isTerminal ? "Session complete" : "Share what's on your mind..."}
               rows={1}
-              disabled={isCompleted}
+              disabled={isTerminal}
               className="w-full resize-none rounded-xl border border-border bg-background px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring placeholder:text-muted-foreground/60 disabled:opacity-50"
               style={{ maxHeight: "120px" }}
             />
           </div>
           <button
             onClick={handleSend}
-            disabled={!input.trim() || isLoading || isCompleted}
+            disabled={!input.trim() || isLoading || isTerminal}
             className="p-2.5 rounded-xl bg-primary text-primary-foreground disabled:opacity-40 transition-all active:scale-95"
           >
             <Send className="w-5 h-5" />

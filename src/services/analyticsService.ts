@@ -5,20 +5,28 @@
 type AnalyticsEvent =
   | "ei_mentor_opened"
   | "entry_path_selected"
+  | "emotional_checkin_started"
   | "emotion_selected"
   | "body_location_selected"
   | "intensity_recorded"
+  | "trigger_entered"
+  | "mirror_confirmed"
+  | "emotion_label_confirmed"
   | "exercise_recommendations_shown"
   | "exercise_selected"
   | "practice_completed"
   | "intensity_change"
+  | "intensity_change_recorded"
+  | "integration_phase_started"
+  | "journal_prompt_shown"
   | "journal_entry_created"
   | "feedback_submitted"
-  | "bug_reported";
+  | "bug_reported"
+  | "mentor_navigation_returned";
 
 interface EventProperties {
   entry_path?: string;
-  emotion_category?: string; // category only, not raw text
+  emotion_category?: string;
   body_region?: string;
   intensity?: number;
   exercise_name?: string;

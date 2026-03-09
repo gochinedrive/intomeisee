@@ -4,10 +4,20 @@ export type MentorStep =
   | "awaiting_emotion"
   | "awaiting_body_location"
   | "awaiting_intensity"
+  | "awaiting_trigger"
+  | "awaiting_mirror_confirmation"
+  | "awaiting_emotion_label"
   | "ready_for_exercise_offer"
   | "awaiting_exercise_choice"
   | "post_practice_check"
   | "awaiting_user_directed_support"
+  | "integration_acknowledge"
+  | "integration_reconstruct"
+  | "integration_psychoeducation"
+  | "integration_meaning"
+  | "integration_body_check"
+  | "integration_journal_invite"
+  | "return_to_options"
   | "safety_override"
   | "completed";
 
@@ -17,6 +27,7 @@ export interface MentorSessionState {
   emotion: string | null;
   body_location: string | null;
   pre_intensity: number | null;
+  trigger_text: string | null;
   exercise_options_shown: string[] | null;
   selected_exercise: string | null;
   attempt_number: number;
@@ -27,6 +38,8 @@ export interface MentorSessionState {
   emotion_label_confirmed: boolean | null;
   safety_override_state: string | null;
   improvement_choice: string | null;
+  session_count: number;
+  psychoeducation_shown: boolean;
 }
 
 export function createInitialState(entryPath: string): MentorSessionState {
@@ -36,6 +49,7 @@ export function createInitialState(entryPath: string): MentorSessionState {
     emotion: null,
     body_location: null,
     pre_intensity: null,
+    trigger_text: null,
     exercise_options_shown: null,
     selected_exercise: null,
     attempt_number: 1,
@@ -46,6 +60,8 @@ export function createInitialState(entryPath: string): MentorSessionState {
     emotion_label_confirmed: null,
     safety_override_state: null,
     improvement_choice: null,
+    session_count: 0,
+    psychoeducation_shown: false,
   };
 }
 
@@ -76,6 +92,7 @@ export function advanceState(
     case "awaiting_body_location": {
       next.body_location = userMessage.trim();
       if (state.entry_path === "regulate") {
+        // Regulate skips intensity/trigger, goes straight to exercises
         next.current_step = "ready_for_exercise_offer";
         next.exercise_options_shown = findExercisesForEmotion(next.emotion || "");
       } else {
@@ -89,14 +106,38 @@ export function advanceState(
       if (numMatch) {
         next.pre_intensity = parseInt(numMatch[1], 10);
       }
+      next.current_step = "awaiting_trigger";
+      break;
+    }
+
+    case "awaiting_trigger": {
+      next.trigger_text = userMessage.trim();
+      next.current_step = "awaiting_mirror_confirmation";
+      next.mirror_used = true;
+      break;
+    }
+
+    case "awaiting_mirror_confirmation": {
+      const confirmed = msg.includes("yes") || msg.includes("correct") || msg.includes("right") || msg.includes("that's it") || msg.includes("exactly");
+      next.mirror_confirmed = confirmed;
+      next.current_step = "awaiting_emotion_label";
+      break;
+    }
+
+    case "awaiting_emotion_label": {
+      const confirmed = msg.includes("yes") || msg.includes("that") || msg.includes("closer") || msg.includes("right");
+      next.emotion_label_confirmed = confirmed;
+      // Update emotion if user provided a different label
+      if (!confirmed && userMessage.trim().length > 2) {
+        next.emotion = userMessage.trim();
+      }
       next.current_step = "ready_for_exercise_offer";
       next.exercise_options_shown = findExercisesForEmotion(next.emotion || "");
       break;
     }
 
     case "ready_for_exercise_offer": {
-      // AI is offering exercises, user shouldn't be sending here normally
-      // but if they do, just stay
+      // AI just presented exercises, stay here until postAIAdvance moves to awaiting_exercise_choice
       break;
     }
 
@@ -137,7 +178,7 @@ export function advanceState(
         (next.post_intensity != null && next.pre_intensity != null && next.post_intensity < next.pre_intensity)
       ) {
         next.improvement_choice = "improved";
-        next.current_step = "completed";
+        next.current_step = "integration_acknowledge";
       } else if ((same || worse) && next.attempt_number < 3) {
         next.attempt_number += 1;
         next.selected_exercise = null;
@@ -149,23 +190,56 @@ export function advanceState(
       } else if ((same || worse) && next.attempt_number >= 3) {
         next.current_step = "awaiting_user_directed_support";
       } else {
-        next.current_step = "completed";
+        // Ambiguous response — treat as improved
+        next.current_step = "integration_acknowledge";
       }
       break;
     }
 
     case "awaiting_user_directed_support": {
-      // User suggested their own action after 3 attempts
       next.improvement_choice = userMessage.trim();
       if (detectSafetyKeywords(msg)) {
         next.current_step = "safety_override";
         next.safety_override_state = "triggered";
       } else {
-        next.current_step = "completed";
+        next.current_step = "integration_acknowledge";
       }
       break;
     }
 
+    // Integration phase steps auto-advance on any user response
+    case "integration_acknowledge": {
+      next.current_step = "integration_reconstruct";
+      break;
+    }
+
+    case "integration_reconstruct": {
+      next.current_step = "integration_psychoeducation";
+      break;
+    }
+
+    case "integration_psychoeducation": {
+      next.psychoeducation_shown = true;
+      next.current_step = "integration_meaning";
+      break;
+    }
+
+    case "integration_meaning": {
+      next.current_step = "integration_body_check";
+      break;
+    }
+
+    case "integration_body_check": {
+      next.current_step = "integration_journal_invite";
+      break;
+    }
+
+    case "integration_journal_invite": {
+      next.current_step = "return_to_options";
+      break;
+    }
+
+    case "return_to_options":
     case "safety_override":
     case "completed":
       break;
