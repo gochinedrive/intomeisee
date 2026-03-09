@@ -1,0 +1,1 @@
+ALTER TABLE public.mentor_sessions ADD COLUMN IF NOT EXISTS trigger_text text;

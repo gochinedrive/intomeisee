@@ -245,6 +245,7 @@ export type Database = {
           safety_override_state: string | null
           selected_exercise: string | null
           started_at: string
+          trigger_text: string | null
           user_id: string
         }
         Insert: {
@@ -267,6 +268,7 @@ export type Database = {
           safety_override_state?: string | null
           selected_exercise?: string | null
           started_at?: string
+          trigger_text?: string | null
           user_id: string
         }
         Update: {
@@ -289,6 +291,7 @@ export type Database = {
           safety_override_state?: string | null
           selected_exercise?: string | null
           started_at?: string
+          trigger_text?: string | null
           user_id?: string
         }
         Relationships: []

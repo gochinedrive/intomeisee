@@ -1,55 +1,13 @@
 import { findExercisesForEmotion, getNextExercises } from "./exerciseMapping";
+import type { MentorStep, MentorSessionState, EntryPath } from "@/types/mentor";
 
-export type MentorStep =
-  | "awaiting_emotion"
-  | "awaiting_body_location"
-  | "awaiting_intensity"
-  | "awaiting_trigger"
-  | "awaiting_mirror_confirmation"
-  | "awaiting_emotion_label"
-  | "ready_for_exercise_offer"
-  | "awaiting_exercise_choice"
-  | "exercise_launch_pending"
-  | "exercise_in_progress"
-  | "exercise_completed_return"
-  | "post_practice_check"
-  | "awaiting_user_directed_support"
-  | "integration_acknowledge"
-  | "integration_reconstruct"
-  | "integration_reconstruct_confirm"
-  | "integration_psychoeducation"
-  | "integration_meaning"
-  | "integration_body_check"
-  | "integration_journal_invite"
-  | "return_to_options"
-  | "safety_override"
-  | "completed";
-
-export interface MentorSessionState {
-  entry_path: "understand" | "regulate" | "prepare";
-  current_step: MentorStep;
-  emotion: string | null;
-  body_location: string | null;
-  pre_intensity: number | null;
-  trigger_text: string | null;
-  exercise_options_shown: string[] | null;
-  selected_exercise: string | null;
-  attempt_number: number;
-  post_intensity: number | null;
-  mirror_used: boolean;
-  mirror_confirmed: boolean | null;
-  emotion_label_suggested: string | null;
-  emotion_label_confirmed: boolean | null;
-  safety_override_state: string | null;
-  improvement_choice: string | null;
-  session_count: number;
-  psychoeducation_shown: boolean;
-  pattern_reflection: string | null;
-}
+export type { MentorStep, MentorSessionState, EntryPath };
 
 export function createInitialState(entryPath: string): MentorSessionState {
   return {
-    entry_path: (entryPath as MentorSessionState["entry_path"]) || "understand",
+    session_id: null,
+    user_id: null,
+    entry_path: (entryPath as EntryPath) || "understand",
     current_step: "awaiting_emotion",
     emotion: null,
     body_location: null,
@@ -65,33 +23,26 @@ export function createInitialState(entryPath: string): MentorSessionState {
     emotion_label_confirmed: null,
     safety_override_state: null,
     improvement_choice: null,
-    session_count: 0,
-    psychoeducation_shown: false,
+    status: "active",
     pattern_reflection: null,
   };
 }
 
-/**
- * Steps that auto-advance after the AI response is shown (no user input needed).
- */
+/** Steps that auto-advance after display (no user input). */
 export const AUTO_ADVANCE_STEPS: MentorStep[] = [
-  "integration_acknowledge",
-  "integration_psychoeducation",
+  "integration_acknowledgement",
+  "integration_amygdala_explanation",
 ];
 
-/**
- * Steps that MUST show action buttons (not free text).
- */
+/** Steps that MUST show action buttons (not free text). */
 export const BUTTON_REQUIRED_STEPS: MentorStep[] = [
   "integration_journal_invite",
-  "return_to_options",
+  "integration_return_to_home",
   "ready_for_exercise_offer",
   "awaiting_exercise_choice",
 ];
 
-/**
- * Deterministic state advancement. The AI does NOT control progression.
- */
+/** Deterministic state advancement. The AI does NOT control progression. */
 export function advanceState(
   state: MentorSessionState,
   userMessage: string
@@ -99,7 +50,6 @@ export function advanceState(
   const next = { ...state };
   const msg = userMessage.toLowerCase().trim();
 
-  // Safety check at every step
   if (detectSafetyKeywords(msg)) {
     next.current_step = "safety_override";
     next.safety_override_state = "triggered";
@@ -107,13 +57,12 @@ export function advanceState(
   }
 
   switch (state.current_step) {
-    case "awaiting_emotion": {
+    case "awaiting_emotion":
       next.emotion = userMessage.trim();
       next.current_step = "awaiting_body_location";
       break;
-    }
 
-    case "awaiting_body_location": {
+    case "awaiting_body_location":
       next.body_location = userMessage.trim();
       if (state.entry_path === "regulate") {
         next.current_step = "ready_for_exercise_offer";
@@ -122,32 +71,28 @@ export function advanceState(
         next.current_step = "awaiting_intensity";
       }
       break;
-    }
 
     case "awaiting_intensity": {
       const numMatch = msg.match(/\b(\d{1,2})\b/);
-      if (numMatch) {
-        next.pre_intensity = parseInt(numMatch[1], 10);
-      }
-      next.current_step = "awaiting_trigger";
+      if (numMatch) next.pre_intensity = parseInt(numMatch[1], 10);
+      next.current_step = "awaiting_trigger_context";
       break;
     }
 
-    case "awaiting_trigger": {
+    case "awaiting_trigger_context":
       next.trigger_text = userMessage.trim();
       next.current_step = "awaiting_mirror_confirmation";
       next.mirror_used = true;
       break;
-    }
 
     case "awaiting_mirror_confirmation": {
-      const confirmed = msg.includes("yes") || msg.includes("correct") || msg.includes("right") || msg.includes("that's it") || msg.includes("exactly");
-      next.mirror_confirmed = confirmed;
-      next.current_step = "awaiting_emotion_label";
+      const yes = msg.includes("yes") || msg.includes("correct") || msg.includes("right") || msg.includes("exactly");
+      next.mirror_confirmed = yes;
+      next.current_step = "awaiting_emotion_label_confirmation";
       break;
     }
 
-    case "awaiting_emotion_label": {
+    case "awaiting_emotion_label_confirmation": {
       const confirmed = msg.includes("yes") || msg.includes("that") || msg.includes("closer") || msg.includes("right");
       next.emotion_label_confirmed = confirmed;
       if (!confirmed && userMessage.trim().length > 2) {
@@ -158,127 +103,89 @@ export function advanceState(
       break;
     }
 
-    case "ready_for_exercise_offer": {
-      // Handled by button click → exercise_launch_pending
+    case "ready_for_exercise_offer":
+    case "awaiting_exercise_choice":
+      // Handled by button click
       break;
-    }
-
-    case "awaiting_exercise_choice": {
-      // Handled by button click → exercise_launch_pending
-      const exercises = next.exercise_options_shown || [];
-      const numMatch = msg.match(/\b([1-3])\b/);
-      if (numMatch) {
-        const idx = parseInt(numMatch[1], 10) - 1;
-        if (exercises[idx]) next.selected_exercise = exercises[idx];
-      }
-      if (!next.selected_exercise) {
-        for (const ex of exercises) {
-          if (msg.includes(ex.toLowerCase().slice(0, 10))) {
-            next.selected_exercise = ex;
-            break;
-          }
-        }
-      }
-      if (!next.selected_exercise && exercises.length > 0) {
-        next.selected_exercise = exercises[0];
-      }
-      next.current_step = "exercise_launch_pending";
-      break;
-    }
 
     case "exercise_launch_pending":
     case "exercise_in_progress":
-      // These are handled by navigation, not user text
       break;
 
-    case "exercise_completed_return": {
-      // Auto-advance to post_practice_check
+    case "exercise_completed_return":
       next.current_step = "post_practice_check";
       break;
-    }
 
     case "post_practice_check": {
       const numMatch = msg.match(/\b(\d{1,2})\b/);
       if (numMatch) next.post_intensity = parseInt(numMatch[1], 10);
 
       const muchBetter = msg.includes("much better");
-      const better = msg.includes("better") || msg.includes("slightly better");
+      const better = msg.includes("better") || msg.includes("slightly");
       const same = msg.includes("same");
       const worse = msg.includes("worse");
 
       if (
-        muchBetter ||
-        better ||
+        muchBetter || better ||
         (next.post_intensity != null && next.pre_intensity != null && next.post_intensity < next.pre_intensity)
       ) {
         next.improvement_choice = "improved";
-        next.current_step = "integration_acknowledge";
+        next.current_step = "integration_acknowledgement";
       } else if ((same || worse) && next.attempt_number < 3) {
         next.attempt_number += 1;
         next.selected_exercise = null;
-        next.exercise_options_shown = getNextExercises(
-          next.emotion || "",
-          next.exercise_options_shown || []
-        );
+        next.post_intensity = null;
+        next.exercise_options_shown = getNextExercises(next.emotion || "", next.exercise_options_shown || []);
         next.current_step = "awaiting_exercise_choice";
       } else if ((same || worse) && next.attempt_number >= 3) {
         next.current_step = "awaiting_user_directed_support";
       } else {
-        // Ambiguous response — treat as improved
-        next.current_step = "integration_acknowledge";
+        next.improvement_choice = "improved";
+        next.current_step = "integration_acknowledgement";
       }
       break;
     }
 
-    case "awaiting_user_directed_support": {
+    case "awaiting_user_directed_support":
       next.improvement_choice = userMessage.trim();
       if (detectSafetyKeywords(msg)) {
         next.current_step = "safety_override";
         next.safety_override_state = "triggered";
       } else {
-        next.current_step = "integration_acknowledge";
+        next.current_step = "integration_acknowledgement";
       }
       break;
-    }
 
     // Integration phase — deterministic substates
-    case "integration_acknowledge": {
-      next.current_step = "integration_reconstruct";
+    case "integration_acknowledgement":
+      next.current_step = "integration_sequence_reflection";
       break;
-    }
 
-    case "integration_reconstruct": {
-      next.current_step = "integration_reconstruct_confirm";
+    case "integration_sequence_reflection":
+      next.current_step = "integration_sequence_confirmation";
       break;
-    }
 
-    case "integration_reconstruct_confirm": {
-      next.current_step = "integration_psychoeducation";
+    case "integration_sequence_confirmation":
+      next.current_step = "integration_amygdala_explanation";
       break;
-    }
 
-    case "integration_psychoeducation": {
-      next.psychoeducation_shown = true;
-      next.current_step = "integration_meaning";
+    case "integration_amygdala_explanation":
+      next.current_step = "integration_meaning_question";
       break;
-    }
 
-    case "integration_meaning": {
+    case "integration_meaning_question":
       next.current_step = "integration_body_check";
       break;
-    }
 
-    case "integration_body_check": {
+    case "integration_body_check":
       next.current_step = "integration_journal_invite";
       break;
-    }
 
-    case "integration_journal_invite": {
-      next.current_step = "return_to_options";
+    case "integration_journal_invite":
+      next.current_step = "integration_return_to_home";
       break;
-    }
 
-    case "return_to_options":
+    case "integration_return_to_home":
     case "safety_override":
     case "completed":
       break;
@@ -287,9 +194,7 @@ export function advanceState(
   return next;
 }
 
-/**
- * After AI responds, advance from ready_for_exercise_offer → awaiting_exercise_choice.
- */
+/** After AI responds, advance from ready_for_exercise_offer → awaiting_exercise_choice. */
 export function postAIAdvance(state: MentorSessionState): MentorSessionState {
   if (state.current_step === "ready_for_exercise_offer") {
     return { ...state, current_step: "awaiting_exercise_choice" };
@@ -306,9 +211,7 @@ function detectSafetyKeywords(msg: string): boolean {
   return keywords.some(kw => msg.includes(kw));
 }
 
-/**
- * Compute similarity between two strings (word overlap ratio).
- */
+/** Word-overlap similarity check (>80% = duplicate). */
 export function isSimilar(a: string, b: string): boolean {
   const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9 ]/g, "").trim();
   const na = normalize(a);
@@ -321,26 +224,24 @@ export function isSimilar(a: string, b: string): boolean {
   return total > 0 && overlap / total > 0.8;
 }
 
-/**
- * Deterministic fallback text for each step, used when AI output lacks a required next action.
- */
+/** Deterministic fallback text for each step. */
 export const STEP_FALLBACKS: Record<string, string> = {
   awaiting_emotion: "What emotion feels strongest for you right now?",
   awaiting_body_location: "Where do you feel this emotion most in your body?",
   awaiting_intensity: "On a scale of 1 to 10, how strong does this emotion feel right now?",
-  awaiting_trigger: "What happened just before you felt this emotion?",
+  awaiting_trigger_context: "What happened just before you felt this emotion?",
   awaiting_mirror_confirmation: "Did I understand that correctly?",
-  awaiting_emotion_label: "Does that label feel right, or does it feel closer to something else?",
+  awaiting_emotion_label_confirmation: "Does that label feel right, or does it feel closer to something else?",
   ready_for_exercise_offer: "Here are some practices that might help. Which would you like to try?",
   awaiting_exercise_choice: "Which exercise would you like to try?",
   post_practice_check: "How does the emotion feel now? You can say much better, slightly better, about the same, or worse — or give a number 1-10.",
   awaiting_user_directed_support: "What do you feel might help you most right now?",
-  integration_acknowledge: "You paused and worked with the feeling instead of reacting automatically. That takes real awareness.",
-  integration_reconstruct: "Let me reconstruct the journey you just went through.",
-  integration_reconstruct_confirm: "Does that capture the journey?",
-  integration_psychoeducation: "When something feels threatening, a part of the brain called the amygdala reacts quickly to protect you.",
-  integration_meaning: "What do you think this feeling might have been trying to tell you?",
+  integration_acknowledgement: "You paused and worked with the feeling instead of reacting automatically. That takes real awareness.",
+  integration_sequence_reflection: "Let me reconstruct the journey you just went through.",
+  integration_sequence_confirmation: "Does that capture the journey?",
+  integration_amygdala_explanation: "When something feels threatening, a part of the brain called the amygdala reacts quickly to protect you. This can show up as fight, flight, freeze, or fawn responses — often felt first as sensations in the body. The practice you did helps signal to the nervous system that it's safe to settle again.",
+  integration_meaning_question: "What do you think this feeling might have been trying to tell you?",
   integration_body_check: "How does your body feel now compared to before?",
   integration_journal_invite: "Would you like to capture this moment in your journal while it's fresh?",
-  return_to_options: "I hope you carry this lighter feeling with you. What would you like to explore next?",
+  integration_return_to_home: "I hope you carry this lighter feeling with you. What would you like to explore next?",
 };
