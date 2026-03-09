@@ -9,10 +9,14 @@ export type MentorStep =
   | "awaiting_emotion_label"
   | "ready_for_exercise_offer"
   | "awaiting_exercise_choice"
+  | "exercise_launch_pending"
+  | "exercise_in_progress"
+  | "exercise_completed_return"
   | "post_practice_check"
   | "awaiting_user_directed_support"
   | "integration_acknowledge"
   | "integration_reconstruct"
+  | "integration_reconstruct_confirm"
   | "integration_psychoeducation"
   | "integration_meaning"
   | "integration_body_check"
@@ -40,6 +44,7 @@ export interface MentorSessionState {
   improvement_choice: string | null;
   session_count: number;
   psychoeducation_shown: boolean;
+  pattern_reflection: string | null;
 }
 
 export function createInitialState(entryPath: string): MentorSessionState {
@@ -62,8 +67,27 @@ export function createInitialState(entryPath: string): MentorSessionState {
     improvement_choice: null,
     session_count: 0,
     psychoeducation_shown: false,
+    pattern_reflection: null,
   };
 }
+
+/**
+ * Steps that auto-advance after the AI response is shown (no user input needed).
+ */
+export const AUTO_ADVANCE_STEPS: MentorStep[] = [
+  "integration_acknowledge",
+  "integration_psychoeducation",
+];
+
+/**
+ * Steps that MUST show action buttons (not free text).
+ */
+export const BUTTON_REQUIRED_STEPS: MentorStep[] = [
+  "integration_journal_invite",
+  "return_to_options",
+  "ready_for_exercise_offer",
+  "awaiting_exercise_choice",
+];
 
 /**
  * Deterministic state advancement. The AI does NOT control progression.
@@ -92,7 +116,6 @@ export function advanceState(
     case "awaiting_body_location": {
       next.body_location = userMessage.trim();
       if (state.entry_path === "regulate") {
-        // Regulate skips intensity/trigger, goes straight to exercises
         next.current_step = "ready_for_exercise_offer";
         next.exercise_options_shown = findExercisesForEmotion(next.emotion || "");
       } else {
@@ -127,7 +150,6 @@ export function advanceState(
     case "awaiting_emotion_label": {
       const confirmed = msg.includes("yes") || msg.includes("that") || msg.includes("closer") || msg.includes("right");
       next.emotion_label_confirmed = confirmed;
-      // Update emotion if user provided a different label
       if (!confirmed && userMessage.trim().length > 2) {
         next.emotion = userMessage.trim();
       }
@@ -137,11 +159,12 @@ export function advanceState(
     }
 
     case "ready_for_exercise_offer": {
-      // AI just presented exercises, stay here until postAIAdvance moves to awaiting_exercise_choice
+      // Handled by button click → exercise_launch_pending
       break;
     }
 
     case "awaiting_exercise_choice": {
+      // Handled by button click → exercise_launch_pending
       const exercises = next.exercise_options_shown || [];
       const numMatch = msg.match(/\b([1-3])\b/);
       if (numMatch) {
@@ -159,6 +182,17 @@ export function advanceState(
       if (!next.selected_exercise && exercises.length > 0) {
         next.selected_exercise = exercises[0];
       }
+      next.current_step = "exercise_launch_pending";
+      break;
+    }
+
+    case "exercise_launch_pending":
+    case "exercise_in_progress":
+      // These are handled by navigation, not user text
+      break;
+
+    case "exercise_completed_return": {
+      // Auto-advance to post_practice_check
       next.current_step = "post_practice_check";
       break;
     }
@@ -207,13 +241,18 @@ export function advanceState(
       break;
     }
 
-    // Integration phase steps auto-advance on any user response
+    // Integration phase — deterministic substates
     case "integration_acknowledge": {
       next.current_step = "integration_reconstruct";
       break;
     }
 
     case "integration_reconstruct": {
+      next.current_step = "integration_reconstruct_confirm";
+      break;
+    }
+
+    case "integration_reconstruct_confirm": {
       next.current_step = "integration_psychoeducation";
       break;
     }
@@ -281,3 +320,27 @@ export function isSimilar(a: string, b: string): boolean {
   const total = Math.max(wordsA.size, wordsB.size);
   return total > 0 && overlap / total > 0.8;
 }
+
+/**
+ * Deterministic fallback text for each step, used when AI output lacks a required next action.
+ */
+export const STEP_FALLBACKS: Record<string, string> = {
+  awaiting_emotion: "What emotion feels strongest for you right now?",
+  awaiting_body_location: "Where do you feel this emotion most in your body?",
+  awaiting_intensity: "On a scale of 1 to 10, how strong does this emotion feel right now?",
+  awaiting_trigger: "What happened just before you felt this emotion?",
+  awaiting_mirror_confirmation: "Did I understand that correctly?",
+  awaiting_emotion_label: "Does that label feel right, or does it feel closer to something else?",
+  ready_for_exercise_offer: "Here are some practices that might help. Which would you like to try?",
+  awaiting_exercise_choice: "Which exercise would you like to try?",
+  post_practice_check: "How does the emotion feel now? You can say much better, slightly better, about the same, or worse — or give a number 1-10.",
+  awaiting_user_directed_support: "What do you feel might help you most right now?",
+  integration_acknowledge: "You paused and worked with the feeling instead of reacting automatically. That takes real awareness.",
+  integration_reconstruct: "Let me reconstruct the journey you just went through.",
+  integration_reconstruct_confirm: "Does that capture the journey?",
+  integration_psychoeducation: "When something feels threatening, a part of the brain called the amygdala reacts quickly to protect you.",
+  integration_meaning: "What do you think this feeling might have been trying to tell you?",
+  integration_body_check: "How does your body feel now compared to before?",
+  integration_journal_invite: "Would you like to capture this moment in your journal while it's fresh?",
+  return_to_options: "I hope you carry this lighter feeling with you. What would you like to explore next?",
+};

@@ -31,30 +31,30 @@ function buildSystemPrompt(state: any, entryPath: string): string {
     : "";
 
   const stepInstructions: Record<string, string> = {
-    awaiting_emotion: `Ask what emotion feels strongest right now. Be warm and curious. If "regulate" path, offer quick options like "activated and tense" or "heavy and low".`,
-    awaiting_body_location: `The user shared emotion "${state.emotion}". Validate briefly (1 sentence). Ask ONE question: "Where do you feel this in your body?" Do NOT repeat the emotion question.`,
-    awaiting_intensity: `Acknowledge emotion "${state.emotion}" in body "${state.body_location}" briefly. Ask: "On a scale of 1 to 10, how strong does this emotion feel right now?"`,
-    awaiting_trigger: `Briefly acknowledge the intensity. Ask: "What happened just before you felt this emotion?" Keep it gentle and curious.`,
-    awaiting_mirror_confirmation: `Reflect back what the user shared. Say something like: "What I'm hearing is that you felt ${state.emotion} mostly in your ${state.body_location}, about ${state.pre_intensity || "moderate"} intensity, after ${state.trigger_text || "what you described"}. Did I understand that correctly?"`,
-    awaiting_emotion_label: `The user confirmed your understanding. Now gently explore the emotion label. Say something like: "Sometimes ${state.emotion} can also carry feelings like hurt or feeling dismissed. Does it feel closer to ${state.emotion}, or something else?" Be curious, not pushy.`,
-    ready_for_exercise_offer: `Present exactly 3 exercises: ${exercises}. Say "Based on what you're experiencing, here are three practices:" then list them numbered 1-3 with brief descriptions. Ask which they'd like to try.`,
-    awaiting_exercise_choice: `Exercises were offered: ${(state.exercise_options_shown || []).join(", ")}. Wait for user to choose. If unsure, gently encourage picking one.`,
-    post_practice_check: `User completed "${state.selected_exercise}". Ask: "How does the emotion feel now?" Offer: much better, slightly better, about the same, worse, or a number 1-10.`,
-    awaiting_user_directed_support: `After ${state.attempt_number} attempts, ask: "What do you feel might help you most right now?" Support safe suggestions. If harmful, trigger safety.`,
-    integration_acknowledge: `Acknowledge the user's effort warmly. Say something like: "You paused and worked with the feeling instead of reacting automatically. That takes real awareness." Keep it brief and genuine.`,
-    integration_reconstruct: `Reconstruct the emotional sequence: "You described feeling ${state.emotion} in your ${state.body_location} after ${state.trigger_text || "what happened"}. After the practice, the intensity shifted from ${state.pre_intensity || "?"} to ${state.post_intensity || "?"}." Ask: "Does that capture the journey?"`,
-    integration_psychoeducation: `Share brief psychoeducation: "When something feels threatening or unfair, a small part of the brain called the amygdala reacts quickly — preparing the body to protect itself. This can show up as fight (pushing back), flight (wanting to escape), freeze (feeling stuck), or fawn (appeasing). The sensations you noticed in your ${state.body_location || "body"} were part of that protective response. The practice you did helps signal to the nervous system that it's safe to settle again." Keep it conversational, not clinical.`,
-    integration_meaning: `Ask gently: "What do you think this feeling might have been trying to tell you?" Do NOT interpret for the user. Just hold space.`,
-    integration_body_check: `Ask: "How does your body feel now compared to before?" Be curious about the shift.`,
-    integration_journal_invite: `Suggest journaling warmly: "Moments like this can be helpful to capture while they're fresh. Over time, journaling can reveal patterns in what triggers certain emotions and what helps regulate them. Would you like to write in your journal?" Do not pressure.`,
-    return_to_options: `Warm closing. Say: "I hope you carry this lighter feeling into the rest of your day." Then ask: "What would you like to explore next?" Offer: Understand how I feel, Regulate my emotions, or Prepare for a hard conversation.`,
+    awaiting_emotion: `Ask what emotion feels strongest right now. Be warm and curious. If "regulate" path, offer quick options like "activated and tense" or "heavy and low". End with a question.`,
+    awaiting_body_location: `The user shared emotion "${state.emotion}". Validate briefly (1 sentence). Ask ONE question: "Where do you feel this in your body?" Do NOT repeat the emotion question. MUST end with a question.`,
+    awaiting_intensity: `Acknowledge emotion "${state.emotion}" in body "${state.body_location}" briefly. Ask: "On a scale of 1 to 10, how strong does this emotion feel right now?" MUST end with this question.`,
+    awaiting_trigger: `Briefly acknowledge the intensity. Ask: "What happened just before you felt this emotion?" MUST end with this question.`,
+    awaiting_mirror_confirmation: `Reflect back what the user shared. Say: "What I'm hearing is that you felt ${state.emotion} mostly in your ${state.body_location}, about ${state.pre_intensity || "moderate"} intensity, after ${state.trigger_text || "what you described"}. Did I understand that correctly?" MUST end with a yes/no question.`,
+    awaiting_emotion_label: `The user confirmed your understanding. Gently explore the emotion label. Say something like: "Sometimes ${state.emotion} can also carry feelings like hurt or feeling dismissed. Does it feel closer to ${state.emotion}, or something else?" MUST end with a question.`,
+    ready_for_exercise_offer: `Present exactly 3 exercises: ${exercises}. Say "Based on what you're experiencing, here are three practices:" then list them numbered 1-3 with brief descriptions. The user will choose via buttons. Keep it brief.`,
+    awaiting_exercise_choice: `Exercises were offered: ${(state.exercise_options_shown || []).join(", ")}. Gently encourage the user to pick one from the options shown. MUST end with a question.`,
+    post_practice_check: `User completed "${state.selected_exercise}". Ask: "How does the emotion feel now?" Offer: much better, slightly better, about the same, worse, or a number 1-10. MUST end with a question.`,
+    awaiting_user_directed_support: `After ${state.attempt_number} attempts, ask: "What do you feel might help you most right now?" Support safe suggestions. MUST end with a question.`,
+    integration_acknowledge: `Acknowledge the user's effort warmly. Say something like: "You paused and worked with the feeling instead of reacting automatically. That takes real awareness." Keep it brief and genuine. This is a statement, no question needed.`,
+    integration_reconstruct: `Reconstruct the emotional sequence: "You described feeling ${state.emotion} in your ${state.body_location} after ${state.trigger_text || "what happened"}. After the practice, the intensity shifted from ${state.pre_intensity || "?"} to ${state.post_intensity || "?"}." End with: "Does that capture the journey?"`,
+    integration_reconstruct_confirm: `The user confirmed the reconstruction. Briefly acknowledge. This is a transition statement. Keep it to one sentence.`,
+    integration_psychoeducation: `Share brief psychoeducation: "When something feels threatening or unfair, a small part of the brain called the amygdala reacts quickly — preparing the body to protect itself. This can show up as fight (pushing back), flight (wanting to escape), freeze (feeling stuck), or fawn (appeasing). The sensations you noticed in your ${state.body_location || "body"} were part of that protective response. The practice you did helps signal to the nervous system that it's safe to settle again." Keep it conversational, not clinical. This is a statement.`,
+    integration_meaning: `Ask gently: "What do you think this feeling might have been trying to tell you?" Do NOT interpret for the user. MUST end with a question.`,
+    integration_body_check: `Ask: "How does your body feel now compared to before?" Be curious about the shift. MUST end with a question.`,
+    integration_journal_invite: `Suggest journaling warmly: "Moments like this can be helpful to capture while they're fresh. Over time, journaling can reveal patterns in what triggers certain emotions and what helps regulate them." The user will see buttons for "Write in journal" and "Maybe later". Do NOT add your own buttons.`,
+    return_to_options: `Warm closing. Say: "I hope you carry this lighter feeling into the rest of your day." Then say: "What would you like to explore next?" The user will see navigation buttons. Do NOT list the options yourself.`,
     safety_override: `Respond with deep empathy. Acknowledge pain. Provide: 988 Suicide & Crisis Lifeline (call/text 988), Crisis Text Line (text HOME to 741741), Samaritans (116 123). Do NOT continue normal flow.`,
     completed: `Warm closing. Acknowledge their effort. Brief reflection on progress.`,
   };
 
   const currentInstruction = stepInstructions[state.current_step] || stepInstructions.awaiting_emotion;
 
-  // Pattern reflection injection
   let patternNote = "";
   if (state.pattern_reflection) {
     patternNote = `\nPATTERN INSIGHT (share naturally, max one sentence): ${state.pattern_reflection}`;
@@ -72,6 +72,8 @@ CRITICAL RULES:
 - If self-harm mentioned, respond with empathy and crisis support only
 - NEVER ask for information already captured
 - Follow the step instruction PRECISELY
+- EVERY response that requires user input MUST end with a clear question mark
+- Do NOT add button/option lists — the UI handles those
 
 ENTRY PATH: "${entryPath}"
 ${entryPath === "understand" ? "Follow the full Flow A sequence with trigger, mirror, label, and integration." : ""}
@@ -87,7 +89,7 @@ ${patternNote}
 INSTRUCTION FOR THIS TURN:
 ${currentInstruction}
 
-Keep responses 2-4 sentences max plus exercise list if applicable.
+Keep responses 2-4 sentences max.
 
 You MUST respond with valid JSON only. No markdown, no extra text. Use this exact structure:
 {

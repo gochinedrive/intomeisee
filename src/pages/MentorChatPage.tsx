@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft, Send, Mic, BookOpen, ChevronRight } from "lucide-react";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { ArrowLeft, Send, Mic, BookOpen, ChevronRight, Play } from "lucide-react";
 import { toast } from "sonner";
 import {
   MentorSessionState,
@@ -10,6 +10,9 @@ import {
   advanceState,
   postAIAdvance,
   isSimilar,
+  AUTO_ADVANCE_STEPS,
+  BUTTON_REQUIRED_STEPS,
+  STEP_FALLBACKS,
 } from "@/lib/mentorSessionState";
 import { SAFETY_RESPONSE } from "@/lib/safety";
 import { callMentor, MentorResponse } from "@/services/mentorService";
@@ -25,6 +28,7 @@ type Message = {
 type ChatAction = {
   label: string;
   action: string;
+  icon?: string;
 };
 
 const entryGreetings: Record<string, string> = {
@@ -42,26 +46,6 @@ const entryTitles: Record<string, string> = {
   prepare: "Hard conversation",
 };
 
-// Deterministic fallback responses when duplicate detected
-const FALLBACK_RESPONSES: Record<string, string> = {
-  awaiting_body_location: "Thank you for sharing that. Where do you notice this feeling in your body?",
-  awaiting_intensity: "I hear you. On a scale of 1 to 10, how intense does this feel right now?",
-  awaiting_trigger: "Thank you. What happened just before you felt this emotion?",
-  awaiting_mirror_confirmation: "Let me make sure I understood correctly. Does that sound right?",
-  awaiting_emotion_label: "Sometimes emotions carry more than one layer. Does the label feel right, or is there something deeper?",
-  ready_for_exercise_offer: "Let me suggest some practices that might help.",
-  post_practice_check: "How does the emotion feel now? You can say much better, slightly better, about the same, or worse — or give a number 1-10.",
-  awaiting_user_directed_support: "We've tried a few approaches. What do you feel might help you most right now?",
-  integration_acknowledge: "You showed real awareness by pausing and working with this feeling.",
-  integration_reconstruct: "Let's look at the journey you just went through.",
-  integration_psychoeducation: "There's something interesting about how the brain processes emotions like this.",
-  integration_meaning: "What do you think this feeling might have been trying to tell you?",
-  integration_body_check: "How does your body feel now compared to before?",
-  integration_journal_invite: "Would you like to capture this moment in your journal while it's fresh?",
-  return_to_options: "I hope you carry this lighter feeling into the rest of your day. What would you like to explore next?",
-  completed: "Thank you for spending this time with yourself. That takes real courage. 💛",
-};
-
 // Analytics event mapping per step
 const STEP_ANALYTICS: Partial<Record<MentorStep, string>> = {
   awaiting_emotion: "emotion_selected",
@@ -75,8 +59,55 @@ const STEP_ANALYTICS: Partial<Record<MentorStep, string>> = {
   integration_journal_invite: "journal_prompt_shown",
 };
 
+/**
+ * Build action buttons for the current step.
+ */
+function getActionsForStep(step: MentorStep, state: MentorSessionState): ChatAction[] | undefined {
+  switch (step) {
+    case "integration_journal_invite":
+      return [
+        { label: "Write in journal", action: "journal", icon: "book" },
+        { label: "Maybe later", action: "skip_journal" },
+      ];
+    case "return_to_options":
+      return [
+        { label: "Understand how I feel", action: "understand" },
+        { label: "Regulate my emotions", action: "regulate" },
+        { label: "Prepare for a hard conversation", action: "prepare" },
+      ];
+    case "ready_for_exercise_offer":
+    case "awaiting_exercise_choice": {
+      const exercises = state.exercise_options_shown || [];
+      return exercises.map((ex, i) => ({
+        label: `${i + 1}. ${ex}`,
+        action: `exercise_${i}`,
+        icon: "play",
+      }));
+    }
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * Check if the AI response contains a question or is acceptable for the current step.
+ * If the step requires a question/buttons and the AI gave a reflective-only response, return false.
+ */
+function responseHasNextAction(text: string, step: MentorStep): boolean {
+  // Auto-advance steps don't need a question
+  if (AUTO_ADVANCE_STEPS.includes(step)) return true;
+  // Button steps are handled by the UI, text just needs to exist
+  if (BUTTON_REQUIRED_STEPS.includes(step)) return true;
+  // For question steps, check that the text ends with a question or contains "?"
+  if (text.includes("?")) return true;
+  // Accept if it's clearly a closing/acknowledgment step
+  if (["completed", "safety_override"].includes(step)) return true;
+  return false;
+}
+
 const MentorChatPage = () => {
   const { entryPath } = useParams<{ entryPath: string }>();
+  const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const path = entryPath || "understand";
 
@@ -92,8 +123,10 @@ const MentorChatPage = () => {
   ]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [exerciseActive, setExerciseActive] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const autoAdvanceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -103,22 +136,45 @@ const MentorChatPage = () => {
     analytics.track("ei_mentor_opened", { entry_path: path });
   }, [path]);
 
-  const addActionsToMessage = (step: MentorStep): ChatAction[] | undefined => {
-    if (step === "integration_journal_invite") {
-      return [
-        { label: "Write in journal", action: "journal" },
-        { label: "Maybe later", action: "skip_journal" },
-      ];
+  // Handle return from exercise player
+  useEffect(() => {
+    const exerciseCompleted = searchParams.get("exerciseCompleted");
+    if (exerciseCompleted === "true") {
+      // Clear the param
+      setSearchParams({}, { replace: true });
+      setExerciseActive(false);
+
+      // Advance state to post_practice_check
+      setSessionState(prev => ({
+        ...prev,
+        current_step: "exercise_completed_return",
+      }));
+
+      // Add a return message and trigger post-practice check
+      const returnMsg: Message = {
+        id: Date.now().toString(),
+        role: "mentor",
+        content: "Welcome back. How does the emotion feel now? You can say much better, slightly better, about the same, or worse — or give a number 1-10.",
+      };
+      setMessages(prev => [...prev, returnMsg]);
+      setSessionState(prev => ({ ...prev, current_step: "post_practice_check" }));
     }
-    if (step === "return_to_options") {
-      return [
-        { label: "Understand how I feel", action: "understand" },
-        { label: "Regulate my emotions", action: "regulate" },
-        { label: "Prepare for a hard conversation", action: "prepare" },
-      ];
+  }, [searchParams, setSearchParams]);
+
+  // Auto-advance for integration steps that don't require user input
+  useEffect(() => {
+    if (AUTO_ADVANCE_STEPS.includes(sessionState.current_step) && !isLoading) {
+      autoAdvanceTimerRef.current = setTimeout(() => {
+        const nextState = advanceState(sessionState, "__auto__");
+        setSessionState(nextState);
+        getMentorResponse(messages, nextState);
+      }, 2000);
     }
-    return undefined;
-  };
+    return () => {
+      if (autoAdvanceTimerRef.current) clearTimeout(autoAdvanceTimerRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionState.current_step, isLoading]);
 
   const getMentorResponse = useCallback(
     async (allMessages: Message[], currentState: MentorSessionState) => {
@@ -164,10 +220,18 @@ const MentorChatPage = () => {
         const lastMentorMsg = prevMentorMessages[prevMentorMessages.length - 1];
         if (lastMentorMsg && isSimilar(text, lastMentorMsg.content)) {
           console.warn("Duplicate question detected, using fallback");
-          text = FALLBACK_RESPONSES[currentState.current_step] || text;
+          text = STEP_FALLBACKS[currentState.current_step] || text;
         }
 
-        const actions = addActionsToMessage(currentState.current_step);
+        // Transition completeness guard: if the AI output doesn't contain a next action, inject fallback
+        if (!responseHasNextAction(text, currentState.current_step)) {
+          const fallback = STEP_FALLBACKS[currentState.current_step];
+          if (fallback) {
+            text = text + "\n\n" + fallback;
+          }
+        }
+
+        const actions = getActionsForStep(currentState.current_step, currentState);
 
         const mentorMsg: Message = {
           id: Date.now().toString(),
@@ -201,11 +265,13 @@ const MentorChatPage = () => {
   const handleActionClick = useCallback((action: string) => {
     if (action === "journal") {
       analytics.track("journal_prompt_shown", { entry_path: path });
+      // Advance state before navigating
+      const newState = advanceState(sessionState, "journal");
+      setSessionState(newState);
       navigate("/app/journal");
       return;
     }
     if (action === "skip_journal") {
-      // Advance to return_to_options
       const newState = advanceState(sessionState, "maybe later");
       setSessionState(newState);
       const userMsg: Message = { id: Date.now().toString(), role: "user", content: "Maybe later" };
@@ -219,10 +285,37 @@ const MentorChatPage = () => {
       navigate(`/app/mentor/${action}`);
       return;
     }
+    // Exercise selection
+    if (action.startsWith("exercise_")) {
+      const idx = parseInt(action.replace("exercise_", ""), 10);
+      const exercises = sessionState.exercise_options_shown || [];
+      const selected = exercises[idx];
+      if (!selected) return;
+
+      analytics.track("exercise_selected", { exercise: selected, entry_path: path });
+
+      // Update state
+      const newState: MentorSessionState = {
+        ...sessionState,
+        selected_exercise: selected,
+        current_step: "exercise_launch_pending",
+      };
+      setSessionState(newState);
+      setExerciseActive(true);
+
+      // Add user message
+      const userMsg: Message = { id: Date.now().toString(), role: "user", content: selected };
+      setMessages(prev => [...prev, userMsg]);
+
+      // Navigate to exercise player
+      const returnTo = `/app/mentor/${path}`;
+      navigate(`/app/exercise?exercise=${encodeURIComponent(selected)}&returnTo=${encodeURIComponent(returnTo)}`);
+      return;
+    }
   }, [sessionState, messages, navigate, path, getMentorResponse]);
 
   const handleSend = useCallback(() => {
-    if (!input.trim() || isLoading) return;
+    if (!input.trim() || isLoading || exerciseActive) return;
     const userText = input.trim();
     const userMsg: Message = {
       id: Date.now().toString(),
@@ -245,9 +338,17 @@ const MentorChatPage = () => {
     setMessages(newMessages);
     setInput("");
 
+    // If new step is exercise_launch_pending from text input, launch exercise
+    if (newState.current_step === "exercise_launch_pending" && newState.selected_exercise) {
+      setExerciseActive(true);
+      const returnTo = `/app/mentor/${path}`;
+      navigate(`/app/exercise?exercise=${encodeURIComponent(newState.selected_exercise)}&returnTo=${encodeURIComponent(returnTo)}`);
+      return;
+    }
+
     // Get structured AI response with updated state
     getMentorResponse(newMessages, newState);
-  }, [input, isLoading, sessionState, messages, getMentorResponse, path]);
+  }, [input, isLoading, exerciseActive, sessionState, messages, getMentorResponse, path, navigate]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -257,6 +358,7 @@ const MentorChatPage = () => {
   };
 
   const isTerminal = sessionState.current_step === "completed" || sessionState.current_step === "safety_override";
+  const inputDisabled = isTerminal || exerciseActive || BUTTON_REQUIRED_STEPS.includes(sessionState.current_step);
 
   return (
     <div className="flex flex-col h-screen bg-background">
@@ -306,7 +408,8 @@ const MentorChatPage = () => {
                       onClick={() => handleActionClick(act.action)}
                       className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium bg-accent text-accent-foreground hover:bg-accent/80 transition-colors"
                     >
-                      {act.action === "journal" && <BookOpen className="w-3.5 h-3.5" />}
+                      {act.icon === "book" && <BookOpen className="w-3.5 h-3.5" />}
+                      {act.icon === "play" && <Play className="w-3.5 h-3.5" />}
                       {act.label}
                       {["understand", "regulate", "prepare"].includes(act.action) && (
                         <ChevronRight className="w-3 h-3" />
@@ -354,16 +457,22 @@ const MentorChatPage = () => {
               value={input}
               onChange={e => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder={isTerminal ? "Session complete" : "Share what's on your mind..."}
+              placeholder={
+                inputDisabled
+                  ? BUTTON_REQUIRED_STEPS.includes(sessionState.current_step)
+                    ? "Choose an option above"
+                    : "Session complete"
+                  : "Share what's on your mind..."
+              }
               rows={1}
-              disabled={isTerminal}
+              disabled={inputDisabled}
               className="w-full resize-none rounded-xl border border-border bg-background px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring placeholder:text-muted-foreground/60 disabled:opacity-50"
               style={{ maxHeight: "120px" }}
             />
           </div>
           <button
             onClick={handleSend}
-            disabled={!input.trim() || isLoading || isTerminal}
+            disabled={!input.trim() || isLoading || inputDisabled}
             className="p-2.5 rounded-xl bg-primary text-primary-foreground disabled:opacity-40 transition-all active:scale-95"
           >
             <Send className="w-5 h-5" />
