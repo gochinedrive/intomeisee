@@ -1,20 +1,27 @@
+import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import { TrendingUp, Flame, Heart, Activity } from "lucide-react";
-
-const stats = [
-  { icon: Flame, label: "Streak", value: "0 days", color: "text-primary" },
-  { icon: Heart, label: "Check-ins", value: "0", color: "text-blush-dark" },
-  { icon: Activity, label: "Practices", value: "0", color: "text-sage-dark" },
-];
+import { getProgressStats } from "@/services/progressService";
 
 const ProgressPage = () => {
+  const [stats, setStats] = useState({ totalSessions: 0, totalPractices: 0, streakDays: 0 });
+
+  useEffect(() => {
+    getProgressStats().then(setStats).catch(() => {});
+  }, []);
+
+  const statCards = [
+    { icon: Flame, label: "Streak", value: `${stats.streakDays} days`, color: "text-primary" },
+    { icon: Heart, label: "Check-ins", value: `${stats.totalSessions}`, color: "text-blush-dark" },
+    { icon: Activity, label: "Practices", value: `${stats.totalPractices}`, color: "text-sage-dark" },
+  ];
+
   return (
     <div className="px-5 pt-8 pb-4 max-w-lg mx-auto">
       <h1 className="font-display text-2xl mb-6">Progress</h1>
 
-      {/* Stats */}
       <div className="grid grid-cols-3 gap-3 mb-8">
-        {stats.map(({ icon: Icon, label, value, color }, i) => (
+        {statCards.map(({ icon: Icon, label, value, color }, i) => (
           <motion.div
             key={label}
             className="flex flex-col items-center p-4 rounded-2xl bg-card shadow-soft"
@@ -29,7 +36,6 @@ const ProgressPage = () => {
         ))}
       </div>
 
-      {/* Empty state */}
       <motion.div
         className="flex flex-col items-center text-center py-12"
         initial={{ opacity: 0 }}
