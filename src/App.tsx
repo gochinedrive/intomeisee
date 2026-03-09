@@ -7,6 +7,7 @@ import PrivacyPage from "./pages/PrivacyPage";
 import AppShell from "./components/AppShell";
 import MentorHomePage from "./pages/MentorHomePage";
 import MentorChatPage from "./pages/MentorChatPage";
+import ExercisePlayerPage from "./pages/ExercisePlayerPage";
 import JournalPage from "./pages/JournalPage";
 import ProgressPage from "./pages/ProgressPage";
 import SettingsPage from "./pages/SettingsPage";
@@ -25,6 +26,7 @@ const App = () => (
           <Route path="/app" element={<AppShell />}>
             <Route index element={<MentorHomePage />} />
             <Route path="mentor/:entryPath" element={<MentorChatPage />} />
+            <Route path="exercise" element={<ExercisePlayerPage />} />
             <Route path="journal" element={<JournalPage />} />
             <Route path="progress" element={<ProgressPage />} />
             <Route path="settings" element={<SettingsPage />} />
