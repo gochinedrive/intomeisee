@@ -84,7 +84,8 @@ const ExercisePlayerPage = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const exerciseName = searchParams.get("exercise") || "Box Breathing";
-  const returnPath = searchParams.get("returnTo") || "/app/mentor/understand";
+  const sessionId = searchParams.get("sessionId") || "";
+  const entryPath = searchParams.get("entryPath") || "understand";
 
   const exerciseInfo = EXERCISE_DATA[exerciseName] || DEFAULT_EXERCISE;
 
@@ -100,7 +101,7 @@ const ExercisePlayerPage = () => {
           if (prev <= 1) {
             clearInterval(intervalRef.current!);
             setPhase("complete");
-            analytics.track("practice_completed", { exercise: exerciseName });
+            analytics.track("practice_completed", { exercise_name: exerciseName });
             return 0;
           }
           return prev - 1;
@@ -121,8 +122,12 @@ const ExercisePlayerPage = () => {
   const progress = 1 - secondsLeft / exerciseInfo.durationSeconds;
 
   const handleComplete = () => {
-    // Navigate back to mentor chat with a flag
-    navigate(`${returnPath}?exerciseCompleted=true`);
+    // Navigate back to mentor chat with sessionId so it reloads the full session
+    navigate(`/app/mentor/${entryPath}?sessionId=${sessionId}&exerciseCompleted=true`);
+  };
+
+  const handleBack = () => {
+    navigate(`/app/mentor/${entryPath}?sessionId=${sessionId}`);
   };
 
   return (
@@ -130,7 +135,7 @@ const ExercisePlayerPage = () => {
       {/* Header */}
       <div className="flex items-center gap-3 px-4 py-3 border-b border-border">
         <button
-          onClick={() => navigate(returnPath)}
+          onClick={handleBack}
           className="p-1.5 rounded-lg hover:bg-muted transition-colors"
         >
           <ArrowLeft className="w-5 h-5 text-foreground" />
