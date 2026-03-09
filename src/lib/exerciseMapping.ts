@@ -18,6 +18,7 @@ export const EMOTION_EXERCISE_MAP: Record<string, string[]> = {
   jealousy: ["Somatic Tracking", "Extended Exhale Breathing", "Self Compassion Meditation"],
   resentment: ["Anger Release Practice", "Release Tension Breathing", "Somatic Tracking"],
   insecurity: ["Self Compassion Meditation", "Calm Nervous System Breathing", "Body Scan Meditation"],
+  "feeling criticized": ["Self Compassion Meditation", "Humming Regulation", "Calm Nervous System Breathing"],
   confusion: ["Body Scan Meditation", "Box Breathing", "Feet Awareness"],
   numbness: ["Temperature Reset", "Body Shaking", "5 Senses Grounding"],
   embarrassment: ["Self Compassion Meditation", "Humming Regulation", "Calm Nervous System Breathing"],

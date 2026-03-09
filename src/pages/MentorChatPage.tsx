@@ -3,9 +3,9 @@ import { motion, AnimatePresence } from "framer-motion";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { ArrowLeft, Send, Mic, BookOpen, ChevronRight, Play } from "lucide-react";
 import { toast } from "sonner";
+import { supabase } from "@/integrations/supabase/client";
+import type { MentorStep, MentorSessionState, ChatMessage, ChatAction } from "@/types/mentor";
 import {
-  MentorSessionState,
-  MentorStep,
   createInitialState,
   advanceState,
   postAIAdvance,
@@ -15,21 +15,8 @@ import {
   STEP_FALLBACKS,
 } from "@/lib/mentorSessionState";
 import { SAFETY_RESPONSE } from "@/lib/safety";
-import { callMentor, MentorResponse } from "@/services/mentorService";
+import { callMentor, type MentorResponse } from "@/services/mentorService";
 import { analytics } from "@/services/analyticsService";
-
-type Message = {
-  id: string;
-  role: "mentor" | "user";
-  content: string;
-  actions?: ChatAction[];
-};
-
-type ChatAction = {
-  label: string;
-  action: string;
-  icon?: string;
-};
 
 const entryGreetings: Record<string, string> = {
   understand:
@@ -46,22 +33,18 @@ const entryTitles: Record<string, string> = {
   prepare: "Hard conversation",
 };
 
-// Analytics event mapping per step
 const STEP_ANALYTICS: Partial<Record<MentorStep, string>> = {
   awaiting_emotion: "emotion_selected",
   awaiting_body_location: "body_location_selected",
   awaiting_intensity: "intensity_recorded",
-  awaiting_trigger: "trigger_entered",
+  awaiting_trigger_context: "trigger_entered",
   awaiting_mirror_confirmation: "mirror_confirmed",
-  awaiting_emotion_label: "emotion_label_confirmed",
+  awaiting_emotion_label_confirmation: "emotion_label_confirmed",
   awaiting_exercise_choice: "exercise_selected",
-  integration_acknowledge: "integration_phase_started",
+  integration_acknowledgement: "integration_phase_started",
   integration_journal_invite: "journal_prompt_shown",
 };
 
-/**
- * Build action buttons for the current step.
- */
 function getActionsForStep(step: MentorStep, state: MentorSessionState): ChatAction[] | undefined {
   switch (step) {
     case "integration_journal_invite":
@@ -69,7 +52,7 @@ function getActionsForStep(step: MentorStep, state: MentorSessionState): ChatAct
         { label: "Write in journal", action: "journal", icon: "book" },
         { label: "Maybe later", action: "skip_journal" },
       ];
-    case "return_to_options":
+    case "integration_return_to_home":
       return [
         { label: "Understand how I feel", action: "understand" },
         { label: "Regulate my emotions", action: "regulate" },
@@ -89,21 +72,122 @@ function getActionsForStep(step: MentorStep, state: MentorSessionState): ChatAct
   }
 }
 
-/**
- * Check if the AI response contains a question or is acceptable for the current step.
- * If the step requires a question/buttons and the AI gave a reflective-only response, return false.
- */
 function responseHasNextAction(text: string, step: MentorStep): boolean {
-  // Auto-advance steps don't need a question
   if (AUTO_ADVANCE_STEPS.includes(step)) return true;
-  // Button steps are handled by the UI, text just needs to exist
   if (BUTTON_REQUIRED_STEPS.includes(step)) return true;
-  // For question steps, check that the text ends with a question or contains "?"
   if (text.includes("?")) return true;
-  // Accept if it's clearly a closing/acknowledgment step
   if (["completed", "safety_override"].includes(step)) return true;
   return false;
 }
+
+// ---------- DB persistence helpers ----------
+
+async function getAuthUserId(): Promise<string | null> {
+  const { data: { session } } = await supabase.auth.getSession();
+  return session?.user?.id || null;
+}
+
+async function createSessionInDB(state: MentorSessionState, userId: string): Promise<string> {
+  const { data, error } = await supabase
+    .from("mentor_sessions")
+    .insert({
+      user_id: userId,
+      entry_path: state.entry_path,
+      current_step: state.current_step,
+      attempt_number: state.attempt_number,
+    })
+    .select("id")
+    .single();
+  if (error) throw error;
+  return data.id;
+}
+
+async function updateSessionInDB(sessionId: string, state: MentorSessionState) {
+  await supabase
+    .from("mentor_sessions")
+    .update({
+      current_step: state.current_step,
+      emotion: state.emotion,
+      body_location: state.body_location,
+      pre_intensity: state.pre_intensity,
+      trigger_text: state.trigger_text,
+      exercise_options_shown: state.exercise_options_shown,
+      selected_exercise: state.selected_exercise,
+      attempt_number: state.attempt_number,
+      post_intensity: state.post_intensity,
+      mirror_used: state.mirror_used,
+      mirror_confirmed: state.mirror_confirmed,
+      emotion_label_suggested: state.emotion_label_suggested,
+      emotion_label_confirmed: state.emotion_label_confirmed,
+      safety_override_state: state.safety_override_state,
+      improvement_choice: state.improvement_choice,
+    })
+    .eq("id", sessionId);
+}
+
+async function loadSessionFromDB(sessionId: string): Promise<MentorSessionState | null> {
+  const { data, error } = await supabase
+    .from("mentor_sessions")
+    .select("*")
+    .eq("id", sessionId)
+    .single();
+  if (error || !data) return null;
+  return {
+    session_id: data.id,
+    user_id: data.user_id,
+    entry_path: data.entry_path as MentorSessionState["entry_path"],
+    current_step: data.current_step as MentorStep,
+    emotion: data.emotion,
+    body_location: data.body_location,
+    pre_intensity: data.pre_intensity,
+    trigger_text: (data as any).trigger_text || null,
+    exercise_options_shown: data.exercise_options_shown,
+    selected_exercise: data.selected_exercise,
+    attempt_number: data.attempt_number,
+    post_intensity: data.post_intensity,
+    mirror_used: data.mirror_used,
+    mirror_confirmed: data.mirror_confirmed,
+    emotion_label_suggested: data.emotion_label_suggested,
+    emotion_label_confirmed: data.emotion_label_confirmed,
+    safety_override_state: data.safety_override_state,
+    improvement_choice: data.improvement_choice,
+    status: data.completed_at ? "completed" : "active",
+    pattern_reflection: null,
+  };
+}
+
+async function loadMessagesFromDB(sessionId: string): Promise<ChatMessage[]> {
+  const { data, error } = await supabase
+    .from("mentor_messages")
+    .select("*")
+    .eq("session_id", sessionId)
+    .order("created_at", { ascending: true });
+  if (error || !data) return [];
+  return data.map((m) => ({
+    id: m.id,
+    role: m.role === "assistant" ? "mentor" : "user",
+    content: m.content,
+    step_at_time: m.step_at_time || undefined,
+  }));
+}
+
+async function saveMessageToDB(
+  sessionId: string,
+  userId: string,
+  role: "user" | "assistant",
+  content: string,
+  step: string
+) {
+  await supabase.from("mentor_messages").insert({
+    session_id: sessionId,
+    user_id: userId,
+    role,
+    content,
+    step_at_time: step,
+  });
+}
+
+// ---------- Component ----------
 
 const MentorChatPage = () => {
   const { entryPath } = useParams<{ entryPath: string }>();
@@ -111,83 +195,158 @@ const MentorChatPage = () => {
   const navigate = useNavigate();
   const path = entryPath || "understand";
 
-  const [sessionState, setSessionState] = useState<MentorSessionState>(
-    createInitialState(path)
-  );
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: "greeting",
-      role: "mentor",
-      content: entryGreetings[path] || entryGreetings.understand,
-    },
-  ]);
+  const [sessionState, setSessionState] = useState<MentorSessionState>(createInitialState(path));
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const [exerciseActive, setExerciseActive] = useState(false);
+  const [initialized, setInitialized] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
   const autoAdvanceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isLoading]);
 
+  // Initialize session: resume from DB or create new
   useEffect(() => {
-    analytics.track("ei_mentor_opened", { entry_path: path });
-  }, [path]);
+    let cancelled = false;
+    const init = async () => {
+      const sessionId = searchParams.get("sessionId");
+      const exerciseCompleted = searchParams.get("exerciseCompleted") === "true";
+      const userId = await getAuthUserId();
 
-  // Handle return from exercise player
-  useEffect(() => {
-    const exerciseCompleted = searchParams.get("exerciseCompleted");
-    if (exerciseCompleted === "true") {
-      // Clear the param
-      setSearchParams({}, { replace: true });
-      setExerciseActive(false);
+      if (sessionId) {
+        // Resume existing session
+        const loaded = await loadSessionFromDB(sessionId);
+        const loadedMsgs = await loadMessagesFromDB(sessionId);
 
-      // Advance state to post_practice_check
-      setSessionState(prev => ({
-        ...prev,
-        current_step: "exercise_completed_return",
-      }));
+        if (!cancelled && loaded) {
+          // If returning from exercise, advance to post_practice_check
+          if (exerciseCompleted) {
+            loaded.current_step = "post_practice_check";
+            if (userId) await updateSessionInDB(sessionId, loaded);
+          }
 
-      // Add a return message and trigger post-practice check
-      const returnMsg: Message = {
-        id: Date.now().toString(),
+          setSessionState(loaded);
+          
+          if (loadedMsgs.length > 0) {
+            setMessages(loadedMsgs);
+            // If returning from exercise, add return message
+            if (exerciseCompleted) {
+              const returnMsg: ChatMessage = {
+                id: Date.now().toString(),
+                role: "mentor",
+                content: "Welcome back. How does the emotion feel now? You can say much better, slightly better, about the same, or worse — or give a number 1-10.",
+              };
+              setMessages(prev => [...prev, returnMsg]);
+              if (userId) {
+                await saveMessageToDB(sessionId, userId, "assistant", returnMsg.content, "post_practice_check");
+              }
+            }
+          } else {
+            // Session exists but no messages — add greeting
+            const greeting: ChatMessage = {
+              id: "greeting",
+              role: "mentor",
+              content: entryGreetings[loaded.entry_path] || entryGreetings.understand,
+            };
+            setMessages([greeting]);
+          }
+
+          // Clear URL params
+          if (exerciseCompleted) {
+            setSearchParams({ sessionId }, { replace: true });
+          }
+          setInitialized(true);
+          return;
+        }
+      }
+
+      // Create new session
+      const greeting: ChatMessage = {
+        id: "greeting",
         role: "mentor",
-        content: "Welcome back. How does the emotion feel now? You can say much better, slightly better, about the same, or worse — or give a number 1-10.",
+        content: entryGreetings[path] || entryGreetings.understand,
       };
-      setMessages(prev => [...prev, returnMsg]);
-      setSessionState(prev => ({ ...prev, current_step: "post_practice_check" }));
-    }
-  }, [searchParams, setSearchParams]);
+
+      if (userId) {
+        try {
+          const newState = createInitialState(path);
+          const newSessionId = await createSessionInDB(newState, userId);
+          newState.session_id = newSessionId;
+          newState.user_id = userId;
+          await saveMessageToDB(newSessionId, userId, "assistant", greeting.content, "awaiting_emotion");
+          if (!cancelled) {
+            setSessionState(newState);
+            setMessages([greeting]);
+            setSearchParams({ sessionId: newSessionId }, { replace: true });
+          }
+        } catch (e) {
+          console.error("Failed to create session in DB:", e);
+          if (!cancelled) {
+            setSessionState(createInitialState(path));
+            setMessages([greeting]);
+          }
+        }
+      } else {
+        // Guest mode — no DB
+        if (!cancelled) {
+          setSessionState(createInitialState(path));
+          setMessages([greeting]);
+        }
+      }
+      if (!cancelled) setInitialized(true);
+    };
+
+    init();
+    analytics.track("ei_mentor_opened", { entry_path: path });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Auto-advance for integration steps that don't require user input
   useEffect(() => {
+    if (!initialized) return;
     if (AUTO_ADVANCE_STEPS.includes(sessionState.current_step) && !isLoading) {
       autoAdvanceTimerRef.current = setTimeout(() => {
         const nextState = advanceState(sessionState, "__auto__");
         setSessionState(nextState);
-        getMentorResponse(messages, nextState);
-      }, 2000);
+        persistStateAndGetResponse(messages, nextState);
+      }, 2500);
     }
     return () => {
       if (autoAdvanceTimerRef.current) clearTimeout(autoAdvanceTimerRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionState.current_step, isLoading]);
+  }, [sessionState.current_step, isLoading, initialized]);
+
+  const persistStateAndGetResponse = useCallback(
+    async (allMessages: ChatMessage[], currentState: MentorSessionState) => {
+      // Persist state to DB
+      if (currentState.session_id && currentState.user_id) {
+        updateSessionInDB(currentState.session_id, currentState).catch(console.error);
+      }
+      await getMentorResponse(allMessages, currentState);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [path]
+  );
 
   const getMentorResponse = useCallback(
-    async (allMessages: Message[], currentState: MentorSessionState) => {
+    async (allMessages: ChatMessage[], currentState: MentorSessionState) => {
       setIsLoading(true);
 
       // Safety override — don't call AI
       if (currentState.current_step === "safety_override") {
-        const safetyMsg: Message = {
+        const safetyMsg: ChatMessage = {
           id: Date.now().toString(),
           role: "mentor",
           content: SAFETY_RESPONSE,
         };
         setMessages(prev => [...prev, safetyMsg]);
+        if (currentState.session_id && currentState.user_id) {
+          saveMessageToDB(currentState.session_id, currentState.user_id, "assistant", SAFETY_RESPONSE, "safety_override").catch(console.error);
+        }
         setIsLoading(false);
         return;
       }
@@ -200,13 +359,8 @@ const MentorChatPage = () => {
       try {
         const response: MentorResponse = await callMentor(apiMessages, currentState, path);
 
-        // Safety override from AI
         if (response.safetyOverride) {
-          const safetyMsg: Message = {
-            id: Date.now().toString(),
-            role: "mentor",
-            content: SAFETY_RESPONSE,
-          };
+          const safetyMsg: ChatMessage = { id: Date.now().toString(), role: "mentor", content: SAFETY_RESPONSE };
           setMessages(prev => [...prev, safetyMsg]);
           setSessionState(prev => ({ ...prev, current_step: "safety_override", safety_override_state: "triggered" }));
           setIsLoading(false);
@@ -223,25 +377,28 @@ const MentorChatPage = () => {
           text = STEP_FALLBACKS[currentState.current_step] || text;
         }
 
-        // Transition completeness guard: if the AI output doesn't contain a next action, inject fallback
+        // Transition completeness guard
         if (!responseHasNextAction(text, currentState.current_step)) {
           const fallback = STEP_FALLBACKS[currentState.current_step];
-          if (fallback) {
-            text = text + "\n\n" + fallback;
-          }
+          if (fallback) text = text + "\n\n" + fallback;
         }
 
         const actions = getActionsForStep(currentState.current_step, currentState);
 
-        const mentorMsg: Message = {
+        const mentorMsg: ChatMessage = {
           id: Date.now().toString(),
           role: "mentor",
           content: text,
           actions,
+          step_at_time: currentState.current_step,
         };
         setMessages(prev => [...prev, mentorMsg]);
 
-        // Track exercise recommendations
+        // Save to DB
+        if (currentState.session_id && currentState.user_id) {
+          saveMessageToDB(currentState.session_id, currentState.user_id, "assistant", text, currentState.current_step).catch(console.error);
+        }
+
         if (response.exerciseOptions && response.exerciseOptions.length > 0) {
           analytics.track("exercise_recommendations_shown", {
             entry_path: path,
@@ -249,7 +406,6 @@ const MentorChatPage = () => {
           });
         }
 
-        // Post-AI state advance (exercise_offer → awaiting_choice)
         const nextState = postAIAdvance(currentState);
         setSessionState(nextState);
       } catch (e) {
@@ -265,19 +421,24 @@ const MentorChatPage = () => {
   const handleActionClick = useCallback((action: string) => {
     if (action === "journal") {
       analytics.track("journal_prompt_shown", { entry_path: path });
-      // Advance state before navigating
       const newState = advanceState(sessionState, "journal");
       setSessionState(newState);
-      navigate("/app/journal");
+      if (newState.session_id && newState.user_id) {
+        updateSessionInDB(newState.session_id, newState).catch(console.error);
+      }
+      navigate("/app/journal?fromMentor=true");
       return;
     }
     if (action === "skip_journal") {
       const newState = advanceState(sessionState, "maybe later");
       setSessionState(newState);
-      const userMsg: Message = { id: Date.now().toString(), role: "user", content: "Maybe later" };
+      const userMsg: ChatMessage = { id: Date.now().toString(), role: "user", content: "Maybe later" };
       const newMessages = [...messages, userMsg];
       setMessages(newMessages);
-      getMentorResponse(newMessages, newState);
+      if (newState.session_id && newState.user_id) {
+        saveMessageToDB(newState.session_id, newState.user_id, "user", "Maybe later", sessionState.current_step).catch(console.error);
+      }
+      persistStateAndGetResponse(newMessages, newState);
       return;
     }
     if (["understand", "regulate", "prepare"].includes(action)) {
@@ -292,45 +453,47 @@ const MentorChatPage = () => {
       const selected = exercises[idx];
       if (!selected) return;
 
-      analytics.track("exercise_selected", { exercise: selected, entry_path: path });
+      analytics.track("exercise_selected", { exercise_name: selected, entry_path: path });
 
-      // Update state
       const newState: MentorSessionState = {
         ...sessionState,
         selected_exercise: selected,
-        current_step: "exercise_launch_pending",
+        current_step: "exercise_in_progress",
       };
       setSessionState(newState);
-      setExerciseActive(true);
 
-      // Add user message
-      const userMsg: Message = { id: Date.now().toString(), role: "user", content: selected };
+      // Save user selection message
+      const userMsg: ChatMessage = { id: Date.now().toString(), role: "user", content: selected };
       setMessages(prev => [...prev, userMsg]);
 
-      // Navigate to exercise player
-      const returnTo = `/app/mentor/${path}`;
-      navigate(`/app/exercise?exercise=${encodeURIComponent(selected)}&returnTo=${encodeURIComponent(returnTo)}`);
+      if (newState.session_id && newState.user_id) {
+        saveMessageToDB(newState.session_id, newState.user_id, "user", selected, "awaiting_exercise_choice").catch(console.error);
+        updateSessionInDB(newState.session_id, newState).catch(console.error);
+      }
+
+      // Navigate to exercise player with sessionId
+      navigate(`/app/exercise?exercise=${encodeURIComponent(selected)}&sessionId=${newState.session_id || ""}&entryPath=${path}`);
       return;
     }
-  }, [sessionState, messages, navigate, path, getMentorResponse]);
+  }, [sessionState, messages, navigate, path, persistStateAndGetResponse]);
 
   const handleSend = useCallback(() => {
-    if (!input.trim() || isLoading || exerciseActive) return;
+    if (!input.trim() || isLoading) return;
+    if (BUTTON_REQUIRED_STEPS.includes(sessionState.current_step)) return;
+
     const userText = input.trim();
-    const userMsg: Message = {
+    const userMsg: ChatMessage = {
       id: Date.now().toString(),
       role: "user",
       content: userText,
+      step_at_time: sessionState.current_step,
     };
 
-    // Track analytics for current step
-    const step = sessionState.current_step;
-    const analyticsEvent = STEP_ANALYTICS[step];
+    const analyticsEvent = STEP_ANALYTICS[sessionState.current_step];
     if (analyticsEvent) {
       analytics.track(analyticsEvent as any, { entry_path: path });
     }
 
-    // Advance state BEFORE calling AI
     const newState = advanceState(sessionState, userText);
     setSessionState(newState);
 
@@ -338,17 +501,19 @@ const MentorChatPage = () => {
     setMessages(newMessages);
     setInput("");
 
-    // If new step is exercise_launch_pending from text input, launch exercise
+    // Save user message to DB
+    if (sessionState.session_id && sessionState.user_id) {
+      saveMessageToDB(sessionState.session_id, sessionState.user_id, "user", userText, sessionState.current_step).catch(console.error);
+    }
+
+    // If exercise launch from text input
     if (newState.current_step === "exercise_launch_pending" && newState.selected_exercise) {
-      setExerciseActive(true);
-      const returnTo = `/app/mentor/${path}`;
-      navigate(`/app/exercise?exercise=${encodeURIComponent(newState.selected_exercise)}&returnTo=${encodeURIComponent(returnTo)}`);
+      navigate(`/app/exercise?exercise=${encodeURIComponent(newState.selected_exercise)}&sessionId=${newState.session_id || ""}&entryPath=${path}`);
       return;
     }
 
-    // Get structured AI response with updated state
-    getMentorResponse(newMessages, newState);
-  }, [input, isLoading, exerciseActive, sessionState, messages, getMentorResponse, path, navigate]);
+    persistStateAndGetResponse(newMessages, newState);
+  }, [input, isLoading, sessionState, messages, persistStateAndGetResponse, path, navigate]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -358,7 +523,25 @@ const MentorChatPage = () => {
   };
 
   const isTerminal = sessionState.current_step === "completed" || sessionState.current_step === "safety_override";
-  const inputDisabled = isTerminal || exerciseActive || BUTTON_REQUIRED_STEPS.includes(sessionState.current_step);
+  const inputDisabled = isTerminal || BUTTON_REQUIRED_STEPS.includes(sessionState.current_step);
+
+  if (!initialized) {
+    return (
+      <div className="flex flex-col h-screen bg-background items-center justify-center">
+        <div className="flex gap-1.5">
+          {[0, 1, 2].map(i => (
+            <motion.div
+              key={i}
+              className="w-2.5 h-2.5 rounded-full bg-primary/40"
+              animate={{ opacity: [0.3, 1, 0.3] }}
+              transition={{ duration: 1, repeat: Infinity, delay: i * 0.2 }}
+            />
+          ))}
+        </div>
+        <p className="text-sm text-muted-foreground mt-3">Loading session...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col h-screen bg-background">
@@ -371,9 +554,7 @@ const MentorChatPage = () => {
           <ArrowLeft className="w-5 h-5 text-foreground" />
         </button>
         <div>
-          <p className="font-semibold text-sm text-foreground">
-            {entryTitles[path]}
-          </p>
+          <p className="font-semibold text-sm text-foreground">{entryTitles[path]}</p>
           <p className="text-xs text-muted-foreground">EI Mentor</p>
         </div>
       </div>
@@ -399,7 +580,6 @@ const MentorChatPage = () => {
                 {msg.content}
               </div>
 
-              {/* Action buttons */}
               {msg.actions && msg.actions.length > 0 && (
                 <div className="flex flex-wrap gap-2 mt-2 max-w-[85%]">
                   {msg.actions.map((act) => (
@@ -423,11 +603,7 @@ const MentorChatPage = () => {
         </AnimatePresence>
 
         {isLoading && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            className="flex justify-start"
-          >
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex justify-start">
             <div className="px-4 py-3 rounded-2xl rounded-tl-md bg-secondary">
               <div className="flex gap-1.5">
                 {[0, 1, 2].map(i => (
@@ -453,7 +629,6 @@ const MentorChatPage = () => {
           </button>
           <div className="flex-1 relative">
             <textarea
-              ref={inputRef}
               value={input}
               onChange={e => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
