@@ -532,6 +532,10 @@ const MentorChatPage = () => {
       if (newState.session_id && newState.user_id) {
         saveMessageToDB(newState.session_id, newState.user_id, "user", selected, "awaiting_exercise_choice").catch(console.error);
         updateSessionInDB(newState.session_id, newState).catch(console.error);
+      } else {
+        // Guest mode: save full state + messages to sessionStorage before navigating away
+        const allMsgs = [...messages, userMsg];
+        saveGuestSession(newState, allMsgs);
       }
 
       // Navigate to exercise player with sessionId
