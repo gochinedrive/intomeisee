@@ -187,6 +187,40 @@ async function saveMessageToDB(
   });
 }
 
+// ---------- Guest persistence helpers ----------
+
+const GUEST_SESSION_KEY = "intomeisee_guest_session";
+const GUEST_MESSAGES_KEY = "intomeisee_guest_messages";
+
+function generateGuestSessionId(): string {
+  return "guest_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8);
+}
+
+function saveGuestSession(state: MentorSessionState, msgs: ChatMessage[]) {
+  try {
+    sessionStorage.setItem(GUEST_SESSION_KEY, JSON.stringify(state));
+    sessionStorage.setItem(GUEST_MESSAGES_KEY, JSON.stringify(msgs));
+  } catch (e) {
+    console.warn("Failed to save guest session:", e);
+  }
+}
+
+function loadGuestSession(): { state: MentorSessionState; messages: ChatMessage[] } | null {
+  try {
+    const stateStr = sessionStorage.getItem(GUEST_SESSION_KEY);
+    const msgsStr = sessionStorage.getItem(GUEST_MESSAGES_KEY);
+    if (!stateStr || !msgsStr) return null;
+    return { state: JSON.parse(stateStr), messages: JSON.parse(msgsStr) };
+  } catch {
+    return null;
+  }
+}
+
+function clearGuestSession() {
+  sessionStorage.removeItem(GUEST_SESSION_KEY);
+  sessionStorage.removeItem(GUEST_MESSAGES_KEY);
+}
+
 // ---------- Component ----------
 
 const MentorChatPage = () => {
@@ -289,10 +323,37 @@ const MentorChatPage = () => {
           }
         }
       } else {
-        // Guest mode — no DB
-        if (!cancelled) {
-          setSessionState(createInitialState(path));
+        // Guest mode — check for saved guest session first
+        const guestData = loadGuestSession();
+        if (!cancelled && guestData && guestData.state.entry_path === path) {
+          const restored = guestData.state;
+          const restoredMsgs = guestData.messages;
+
+          if (exerciseCompleted) {
+            restored.current_step = "post_practice_check";
+            const returnMsg: ChatMessage = {
+              id: Date.now().toString(),
+              role: "mentor",
+              content: "Welcome back. How does the emotion feel now? You can say much better, slightly better, about the same, or worse — or give a number 1-10.",
+            };
+            restoredMsgs.push(returnMsg);
+          }
+
+          setSessionState(restored);
+          setMessages(restoredMsgs);
+          // Clear exerciseCompleted from URL
+          if (exerciseCompleted) {
+            const guestSid = restored.session_id || "";
+            setSearchParams(guestSid ? { sessionId: guestSid } : {}, { replace: true });
+          }
+        } else if (!cancelled) {
+          // Truly new guest session
+          const newState = createInitialState(path);
+          newState.session_id = generateGuestSessionId();
+          clearGuestSession();
+          setSessionState(newState);
           setMessages([greeting]);
+          saveGuestSession(newState, [greeting]);
         }
       }
       if (!cancelled) setInitialized(true);
@@ -303,6 +364,15 @@ const MentorChatPage = () => {
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Guest auto-save: persist to sessionStorage whenever state or messages change
+  useEffect(() => {
+    if (!initialized) return;
+    // Only save for guest users (no user_id means guest)
+    if (!sessionState.user_id && messages.length > 0) {
+      saveGuestSession(sessionState, messages);
+    }
+  }, [sessionState, messages, initialized]);
 
   // Auto-advance for integration steps that don't require user input
   useEffect(() => {
@@ -322,9 +392,11 @@ const MentorChatPage = () => {
 
   const persistStateAndGetResponse = useCallback(
     async (allMessages: ChatMessage[], currentState: MentorSessionState) => {
-      // Persist state to DB
+      // Persist state to DB (authenticated) or localStorage (guest)
       if (currentState.session_id && currentState.user_id) {
         updateSessionInDB(currentState.session_id, currentState).catch(console.error);
+      } else {
+        saveGuestSession(currentState, allMessages);
       }
       await getMentorResponse(allMessages, currentState);
     },
@@ -469,6 +541,10 @@ const MentorChatPage = () => {
       if (newState.session_id && newState.user_id) {
         saveMessageToDB(newState.session_id, newState.user_id, "user", selected, "awaiting_exercise_choice").catch(console.error);
         updateSessionInDB(newState.session_id, newState).catch(console.error);
+      } else {
+        // Guest mode: save full state + messages to sessionStorage before navigating away
+        const allMsgs = [...messages, userMsg];
+        saveGuestSession(newState, allMsgs);
       }
 
       // Navigate to exercise player with sessionId
