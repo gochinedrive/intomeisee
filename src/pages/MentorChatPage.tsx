@@ -365,6 +365,15 @@ const MentorChatPage = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Guest auto-save: persist to sessionStorage whenever state or messages change
+  useEffect(() => {
+    if (!initialized) return;
+    // Only save for guest users (no user_id means guest)
+    if (!sessionState.user_id && messages.length > 0) {
+      saveGuestSession(sessionState, messages);
+    }
+  }, [sessionState, messages, initialized]);
+
   // Auto-advance for integration steps that don't require user input
   useEffect(() => {
     if (!initialized) return;
