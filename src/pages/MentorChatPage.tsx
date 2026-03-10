@@ -383,9 +383,11 @@ const MentorChatPage = () => {
 
   const persistStateAndGetResponse = useCallback(
     async (allMessages: ChatMessage[], currentState: MentorSessionState) => {
-      // Persist state to DB
+      // Persist state to DB (authenticated) or localStorage (guest)
       if (currentState.session_id && currentState.user_id) {
         updateSessionInDB(currentState.session_id, currentState).catch(console.error);
+      } else {
+        saveGuestSession(currentState, allMessages);
       }
       await getMentorResponse(allMessages, currentState);
     },
