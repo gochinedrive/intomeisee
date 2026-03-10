@@ -187,6 +187,40 @@ async function saveMessageToDB(
   });
 }
 
+// ---------- Guest persistence helpers ----------
+
+const GUEST_SESSION_KEY = "intomeisee_guest_session";
+const GUEST_MESSAGES_KEY = "intomeisee_guest_messages";
+
+function generateGuestSessionId(): string {
+  return "guest_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8);
+}
+
+function saveGuestSession(state: MentorSessionState, msgs: ChatMessage[]) {
+  try {
+    sessionStorage.setItem(GUEST_SESSION_KEY, JSON.stringify(state));
+    sessionStorage.setItem(GUEST_MESSAGES_KEY, JSON.stringify(msgs));
+  } catch (e) {
+    console.warn("Failed to save guest session:", e);
+  }
+}
+
+function loadGuestSession(): { state: MentorSessionState; messages: ChatMessage[] } | null {
+  try {
+    const stateStr = sessionStorage.getItem(GUEST_SESSION_KEY);
+    const msgsStr = sessionStorage.getItem(GUEST_MESSAGES_KEY);
+    if (!stateStr || !msgsStr) return null;
+    return { state: JSON.parse(stateStr), messages: JSON.parse(msgsStr) };
+  } catch {
+    return null;
+  }
+}
+
+function clearGuestSession() {
+  sessionStorage.removeItem(GUEST_SESSION_KEY);
+  sessionStorage.removeItem(GUEST_MESSAGES_KEY);
+}
+
 // ---------- Component ----------
 
 const MentorChatPage = () => {
