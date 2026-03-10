@@ -323,10 +323,37 @@ const MentorChatPage = () => {
           }
         }
       } else {
-        // Guest mode — no DB
-        if (!cancelled) {
-          setSessionState(createInitialState(path));
+        // Guest mode — check for saved guest session first
+        const guestData = loadGuestSession();
+        if (!cancelled && guestData && guestData.state.entry_path === path) {
+          const restored = guestData.state;
+          const restoredMsgs = guestData.messages;
+
+          if (exerciseCompleted) {
+            restored.current_step = "post_practice_check";
+            const returnMsg: ChatMessage = {
+              id: Date.now().toString(),
+              role: "mentor",
+              content: "Welcome back. How does the emotion feel now? You can say much better, slightly better, about the same, or worse — or give a number 1-10.",
+            };
+            restoredMsgs.push(returnMsg);
+          }
+
+          setSessionState(restored);
+          setMessages(restoredMsgs);
+          // Clear exerciseCompleted from URL
+          if (exerciseCompleted) {
+            const guestSid = restored.session_id || "";
+            setSearchParams(guestSid ? { sessionId: guestSid } : {}, { replace: true });
+          }
+        } else if (!cancelled) {
+          // Truly new guest session
+          const newState = createInitialState(path);
+          newState.session_id = generateGuestSessionId();
+          clearGuestSession();
+          setSessionState(newState);
           setMessages([greeting]);
+          saveGuestSession(newState, [greeting]);
         }
       }
       if (!cancelled) setInitialized(true);
