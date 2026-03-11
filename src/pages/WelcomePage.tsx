@@ -1,9 +1,16 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import { Lock, Mail, Chrome, Apple, Eye, EyeOff } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
-import { signUpWithEmail, signInWithEmail, enableGuestMode } from "@/services/authService";
+import {
+  signUpWithEmail,
+  signInWithEmail,
+  signInWithGoogle,
+  signInWithApple,
+  enableGuestMode,
+  getSession,
+} from "@/services/authService";
 
 const WelcomePage = () => {
   const navigate = useNavigate();
@@ -13,6 +20,18 @@ const WelcomePage = () => {
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [checkingSession, setCheckingSession] = useState(true);
+
+  // Redirect if already authenticated
+  useEffect(() => {
+    getSession().then((session) => {
+      if (session) {
+        navigate("/app", { replace: true });
+      } else {
+        setCheckingSession(false);
+      }
+    }).catch(() => setCheckingSession(false));
+  }, [navigate]);
 
   const handleEmailAuth = async () => {
     if (!email || !password) {
@@ -35,10 +54,42 @@ const WelcomePage = () => {
     }
   };
 
+  const handleGoogle = async () => {
+    setLoading(true);
+    try {
+      await signInWithGoogle();
+      // OAuth redirects the browser; this code only runs if no redirect happened
+    } catch (e: any) {
+      toast.error(e.message || "Google sign-in failed");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleApple = async () => {
+    setLoading(true);
+    try {
+      await signInWithApple();
+      // OAuth redirects the browser; this code only runs if no redirect happened
+    } catch (e: any) {
+      toast.error(e.message || "Apple sign-in failed");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleGuest = () => {
     enableGuestMode();
     navigate("/app");
   };
+
+  if (checkingSession) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center px-6 py-12 bg-background">
@@ -55,7 +106,7 @@ const WelcomePage = () => {
         transition={{ duration: 0.6, ease: "easeOut" }}
       >
         <h1 className="font-display text-4xl md:text-5xl text-foreground text-center leading-tight">
-          In To Me I See
+          InToMeISee
         </h1>
         <p className="mt-4 text-muted-foreground text-center text-base leading-relaxed">
           Your personal emotional intelligence mentor.
@@ -92,16 +143,18 @@ const WelcomePage = () => {
               </button>
 
               <button
-                onClick={() => toast.info("Google sign-in coming soon")}
-                className="w-full flex items-center justify-center gap-3 px-6 py-3.5 rounded-xl bg-card border border-border font-medium text-base shadow-soft transition-transform active:scale-[0.98]"
+                onClick={handleGoogle}
+                disabled={loading}
+                className="w-full flex items-center justify-center gap-3 px-6 py-3.5 rounded-xl bg-card border border-border font-medium text-base shadow-soft transition-transform active:scale-[0.98] disabled:opacity-50"
               >
                 <Chrome className="w-5 h-5" />
                 Continue with Google
               </button>
 
               <button
-                onClick={() => toast.info("Apple sign-in coming soon")}
-                className="w-full flex items-center justify-center gap-3 px-6 py-3.5 rounded-xl bg-foreground text-background font-medium text-base shadow-soft transition-transform active:scale-[0.98]"
+                onClick={handleApple}
+                disabled={loading}
+                className="w-full flex items-center justify-center gap-3 px-6 py-3.5 rounded-xl bg-foreground text-background font-medium text-base shadow-soft transition-transform active:scale-[0.98] disabled:opacity-50"
               >
                 <Apple className="w-5 h-5" />
                 Continue with Apple
