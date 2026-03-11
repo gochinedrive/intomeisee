@@ -243,20 +243,45 @@ const MentorChatPage = () => {
   }, [messages, isLoading]);
 
   // Initialize session: resume from DB or create new
+  // Re-runs when entryPath or sessionId changes (e.g. switching flows)
+  const urlSessionId = searchParams.get("sessionId");
   useEffect(() => {
     let cancelled = false;
+
+    // Detect if this is a flow switch (entryPath changed, not an exercise return)
+    const isFlowSwitch = prevPathRef.current !== path;
+    prevPathRef.current = path;
+
+    if (isFlowSwitch) {
+      // Reset all local state immediately for the new flow
+      console.log("[MentorChat] Flow switch detected:", path);
+      setInitialized(false);
+      setMessages([]);
+      setInput("");
+      setIsLoading(false);
+      clearGuestSession();
+    }
+
     const init = async () => {
-      const sessionId = searchParams.get("sessionId");
+      const sessionId = urlSessionId;
       const exerciseCompleted = searchParams.get("exerciseCompleted") === "true";
       const userId = await getAuthUserId();
 
-      if (sessionId) {
-        // Resume existing session
+      console.log("[MentorChat] Init running", { path, sessionId, isFlowSwitch, exerciseCompleted, isAuth: !!userId });
+
+      // If this is a flow switch, ignore any stale sessionId from the previous flow
+      if (isFlowSwitch && sessionId) {
+        // Clear the old sessionId from URL — we'll create a new session
+        setSearchParams({}, { replace: true });
+      }
+
+      // Resume existing session ONLY if not a flow switch
+      if (sessionId && !isFlowSwitch) {
+        console.log("[MentorChat] Resuming session:", sessionId);
         const loaded = await loadSessionFromDB(sessionId);
         const loadedMsgs = await loadMessagesFromDB(sessionId);
 
         if (!cancelled && loaded) {
-          // If returning from exercise, advance to post_practice_check
           if (exerciseCompleted) {
             loaded.current_step = "post_practice_check";
             if (userId) await updateSessionInDB(sessionId, loaded);
@@ -266,7 +291,6 @@ const MentorChatPage = () => {
           
           if (loadedMsgs.length > 0) {
             setMessages(loadedMsgs);
-            // If returning from exercise, add return message
             if (exerciseCompleted) {
               const returnMsg: ChatMessage = {
                 id: Date.now().toString(),
@@ -279,7 +303,6 @@ const MentorChatPage = () => {
               }
             }
           } else {
-            // Session exists but no messages — add greeting
             const greeting: ChatMessage = {
               id: "greeting",
               role: "mentor",
@@ -288,7 +311,6 @@ const MentorChatPage = () => {
             setMessages([greeting]);
           }
 
-          // Clear URL params
           if (exerciseCompleted) {
             setSearchParams({ sessionId }, { replace: true });
           }
@@ -298,6 +320,7 @@ const MentorChatPage = () => {
       }
 
       // Create new session
+      console.log("[MentorChat] Creating new session for:", path);
       const greeting: ChatMessage = {
         id: "greeting",
         role: "mentor",
@@ -312,6 +335,7 @@ const MentorChatPage = () => {
           newState.user_id = userId;
           await saveMessageToDB(newSessionId, userId, "assistant", greeting.content, "awaiting_emotion");
           if (!cancelled) {
+            console.log("[MentorChat] New DB session created:", newSessionId);
             setSessionState(newState);
             setMessages([greeting]);
             setSearchParams({ sessionId: newSessionId }, { replace: true });
@@ -324,9 +348,10 @@ const MentorChatPage = () => {
           }
         }
       } else {
-        // Guest mode — check for saved guest session first
-        const guestData = loadGuestSession();
+        // Guest mode — check for saved guest session (only if not a flow switch)
+        const guestData = !isFlowSwitch ? loadGuestSession() : null;
         if (!cancelled && guestData && guestData.state.entry_path === path) {
+          console.log("[MentorChat] Restoring guest session");
           const restored = guestData.state;
           const restoredMsgs = guestData.messages;
 
@@ -342,13 +367,12 @@ const MentorChatPage = () => {
 
           setSessionState(restored);
           setMessages(restoredMsgs);
-          // Clear exerciseCompleted from URL
           if (exerciseCompleted) {
             const guestSid = restored.session_id || "";
             setSearchParams(guestSid ? { sessionId: guestSid } : {}, { replace: true });
           }
         } else if (!cancelled) {
-          // Truly new guest session
+          console.log("[MentorChat] New guest session for:", path);
           const newState = createInitialState(path);
           newState.session_id = generateGuestSessionId();
           clearGuestSession();
@@ -364,7 +388,7 @@ const MentorChatPage = () => {
     analytics.track("ei_mentor_opened", { entry_path: path });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [path, urlSessionId]);
 
   // Guest auto-save: persist to sessionStorage whenever state or messages change
   useEffect(() => {
